@@ -146,7 +146,6 @@ typedef enum {
 typedef enum {
     BIOS_PRINT_CHAR = 0x01,
     BIOS_CLEAR_SCREEN = 0x02,
-    BIOS_WAIT = 0x03,
     BIOS_PRINT_STRING = 0x04,
     BIOS_PRINT_NEWLINE = 0x05,
     BIOS_SET_CURSOR_POS = 0x0A,
@@ -170,6 +169,7 @@ typedef enum {
 // BIOS System Functions
 typedef enum {
     BIOS_GET_CPU_VER = 0x01,
+    BIOS_WAIT = 0x03,
     BIOS_INVALID_SYSTEM_FUNCTION = 0xFF
 } BIOSSystemFunction;
 
@@ -449,9 +449,6 @@ void bios_interrupt(uint8_t interrupt_number) {
         case BIOS_CLEAR_SCREEN:
             bios_clear_screen();
             break;
-        case BIOS_WAIT:
-            bios_wait((uint32_t)registers[REG_F1]);
-            break;
         case BIOS_PRINT_STRING:
             bios_print_string((uint32_t)registers[REG_F1]);
             break;
@@ -508,6 +505,9 @@ void bios_interrupt(uint8_t interrupt_number) {
         switch (function) {
         case BIOS_GET_CPU_VER:
             registers[REG_F1] = CPU_VER;
+            break;
+        case BIOS_WAIT:
+            bios_wait((uint32_t)registers[REG_F1]);
             break;
         default:
             printf("BIOS Interrupt 0x%02X (System) - Unknown function: 0x%02X\n", bios_int, function);
