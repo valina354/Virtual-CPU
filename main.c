@@ -567,13 +567,11 @@ void set_sign_flag_float(double result) {
 }
 
 void set_carry_flag(double result, double operand1, double operand2, Opcode opcode) {
-    carry_flag = false; // Basic carry flag - needs more detailed logic if required for float
-    // For example, for addition of large floats, it could indicate magnitude overflow
+    carry_flag = false;
 }
 
 void set_overflow_flag(double result, double operand1, double operand2, Opcode opcode) {
-    overflow_flag = false; // Basic overflow flag - needs more detailed logic if required for float
-    // For example, could indicate precision loss, or exceeding representable range
+    overflow_flag = false;
 }
 
 
