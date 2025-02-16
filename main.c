@@ -118,6 +118,7 @@ typedef enum {
     OP_MATH_ROUND,
     OP_MATH_MIN,
     OP_MATH_MAX,
+    OP_MATH_NEG,
 
     OP_INVALID       // Invalid Opcode
 } Opcode;
@@ -1208,7 +1209,17 @@ void execute_instruction(Opcode opcode) {
             set_overflow_flag(registers[reg1], registers[reg1], registers[reg2], opcode);
         }
         break;
-
+    case OP_MATH_NEG: {
+        reg1 = decode_register();
+        if (reg1 != REG_INVALID) {
+            registers[reg1] = -registers[reg1];
+            set_zero_flag_float(registers[reg1]);
+            set_sign_flag_float(registers[reg1]);
+            set_carry_flag(registers[reg1], 0, 0, opcode);
+            set_overflow_flag(registers[reg1], 0, 0, opcode);
+        }
+        break;
+    }
 
     case OP_INVALID:
         printf("Invalid Opcode!\n");
@@ -1435,6 +1446,9 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2) {
         }
         else if (strcmp(math_func, "max") == 0) {
             if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_MAX;
+        }
+        else if (strcmp(math_func, "neg") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_MATH_NEG;
         }
     }
 
@@ -1935,6 +1949,7 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_MATH_FLOOR:
         case OP_MATH_CEIL:
         case OP_MATH_ROUND:
+        case OP_MATH_NEG:
             program_counter += 1; break;
         case OP_INT: program_counter += 4; break;
         case OP_JMP:
@@ -2159,6 +2174,7 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_MATH_FLOOR:
         case OP_MATH_CEIL:
         case OP_MATH_ROUND:
+        case OP_MATH_NEG:
         {
             RegisterIndex reg = register_from_string(reg1_str);
             if (reg == REG_INVALID) {
