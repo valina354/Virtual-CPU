@@ -13,7 +13,7 @@ countdown_loop:
 
     MOV F0, 0x03        ; BIOS Function: WAIT
     MOV F1, 100         ; Wait for 100 milliseconds
-    INT 0x01            ; Call BIOS Video Interrupt
+    INT 0x02            ; Call BIOS System Interrupt
 
     MOV R1, 1           ; Value to subtract
     math.sub R0, R1     ; Decrement counter R0 by 1
