@@ -2194,7 +2194,7 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, ch
                 !is_register_str(operand3) && !is_memory_address_str(operand3)) // Value is immediate
                 return OP_MEM_SET_MEM_REG_VAL;
         }
-        else if (strcmp(mem_func, "free") == 0) {
+        else if (strcmp(mem_func, "clear") == 0) {
             if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1)) {
                 return OP_MEM_FREE_MEM;
             }
