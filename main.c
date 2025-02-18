@@ -21,7 +21,7 @@
 #define MEMORY_SIZE (16384 * 1024) // 16MB Memory
 #define NUM_GENERAL_REGISTERS 32
 #define NUM_F_REGISTERS 4
-#define CPU_VER 2 // CPU Version 2
+#define CPU_VER 3 // CPU Version 2
 #define MAX_PREPROCESSOR_DEPTH 10 // Maximum depth for nested preprocessor directives
 
 // CPU Speed Simulation
@@ -39,19 +39,27 @@ typedef enum {
     OP_MOV_REG_MEM,  // Move Memory to Register
     OP_MOV_MEM_REG,  // Move Register to Memory
     OP_ADD_REG_REG,  // Add Register to Register
+    OP_ADD_REG_VAL,  // Add Value to Register
     OP_SUB_REG_REG,  // Subtract Register from Register
+    OP_SUB_REG_VAL,  // Subtract Value from Register
     OP_MUL_REG_REG,  // Multiply Register by Register
+    OP_MUL_REG_VAL,  // Multiply Value to Register
     OP_DIV_REG_REG,  // Divide Register by Register
+    OP_DIV_REG_VAL,  // Divide Value to Register
     OP_MOD_REG_REG,  // Modulo Register by Register
+    OP_MOD_REG_VAL,  // Modulo Value to Register
     OP_AND_REG_REG,  // Bitwise AND Register with Register
+    OP_AND_REG_VAL,  // Bitwise AND Value to Register
     OP_OR_REG_REG,   // Bitwise OR Register with Register
+    OP_OR_REG_VAL,   // Bitwise OR Value to Register
     OP_XOR_REG_REG,  // Bitwise XOR Register with Register
+    OP_XOR_REG_VAL,  // Bitwise XOR Value to Register
     OP_NOT_REG,      // Bitwise NOT Register
     OP_NEG_REG,      // Negate Register
     OP_CMP_REG_REG,  // Compare Register with Register
     OP_CMP_REG_VAL,  // Compare Register with Value
     OP_TEST_REG_REG, // Bitwise AND Register with Register, update flags
-    OP_TEST_REG_VAL, // Bitwise AND Register with Value, update flags
+    OP_TEST_REG_VAL, // Bitwise AND Value, update flags
     OP_IMUL_REG_REG, // Integer Multiply Register by Register (signed)
     OP_IDIV_REG_REG, // Integer Divide Register by Register (signed)
     OP_MOVZX_REG_REG, // Move with Zero-Extend Register to Register
@@ -69,12 +77,10 @@ typedef enum {
     OP_JMP_NC,       // Jump if Not Carry
     OP_JMP_O,        // Jump if Overflow
     OP_JMP_NO,       // Jump if Not Overflow
-    OP_JMP_GE,  // Jump if greater or equal (signed)
-    OP_JMP_LE,  // Jump if less or equal (signed)
-    OP_JMP_G,   // Jump if greater (signed)
-    OP_JMP_L,   // Jump if less (signed)
-    OP_JMP_PAR, // Jump if parity (even bits - using Zero Flag for now)
-    OP_JMP_NPAR, // Jump if not parity (odd bits - using not Zero Flag for now)
+    OP_JMP_GE,      // Jump if greater or equal (signed)
+    OP_JMP_LE,      // Jump if less or equal (signed)
+    OP_JMP_G,       // Jump if greater (signed)
+    OP_JMP_L,       // Jump if less (signed)
     OP_HLT,          // Halt CPU
     OP_INC_REG,      // Increment Register
     OP_DEC_REG,      // Decrement Register
@@ -567,11 +573,59 @@ void set_sign_flag_float(double result) {
 }
 
 void set_carry_flag(double result, double operand1, double operand2, Opcode opcode) {
-    carry_flag = false;
+    // Basic carry flag logic for addition and subtraction (for integer part)
+    if (opcode == OP_ADD_REG_REG || opcode == OP_ADD_REG_VAL || opcode == OP_MATH_ADD) {
+        carry_flag = (result > HUGE_VAL || result < -HUGE_VAL); // Very basic overflow check for doubles
+    }
+    else if (opcode == OP_SUB_REG_REG || opcode == OP_SUB_REG_VAL || opcode == OP_MATH_SUB) {
+        carry_flag = (result > HUGE_VAL || result < -HUGE_VAL); //  Basic underflow check for doubles
+    }
+    else {
+        carry_flag = false; // Reset for other operations
+    }
 }
 
+
 void set_overflow_flag(double result, double operand1, double operand2, Opcode opcode) {
-    overflow_flag = false;
+    overflow_flag = false; // Overflow flag not reliably implemented for double operations in this example
+}
+
+void set_zero_flag_int(uint32_t result) {
+    zero_flag = (result == 0);
+}
+
+void set_sign_flag_int(uint32_t result) {
+    sign_flag = ((int32_t)result < 0); // Treat as signed int for sign flag
+}
+
+void set_carry_flag_int(uint32_t result, uint32_t operand1, uint32_t operand2, Opcode opcode) {
+    if (opcode == OP_ADD_REG_REG || opcode == OP_ADD_REG_VAL) {
+        carry_flag = (result < operand1); // Carry if result is smaller than operand1 (unsigned overflow)
+    }
+    else if (opcode == OP_SUB_REG_REG || opcode == OP_SUB_REG_VAL) {
+        carry_flag = (result > operand1); // Borrow if result is larger than operand1 (unsigned underflow)
+    }
+    else if (opcode == OP_SHL_REG_REG || opcode == OP_SHL_REG_VAL || opcode == OP_SAR_REG_REG || opcode == OP_SAR_REG_VAL || opcode == OP_SHR_REG_REG || opcode == OP_SHR_REG_VAL || opcode == OP_ROL_REG_REG || opcode == OP_ROL_REG_VAL || opcode == OP_ROR_REG_REG || opcode == OP_ROR_REG_VAL) {
+        carry_flag = (result != result); // Placeholder - for shifts and rotates, set to indicate shift happened (can be improved)
+    }
+    else {
+        carry_flag = false;
+    }
+}
+
+
+void set_overflow_flag_int(uint32_t result, uint32_t operand1, uint32_t operand2, Opcode opcode) {
+    if (opcode == OP_ADD_REG_REG || opcode == OP_ADD_REG_VAL) {
+        // Signed overflow for addition: if signs of operands are same, and sign of result is different
+        overflow_flag = (((operand1 ^ operand2) & 0x80000000) == 0 && ((operand1 ^ result) & 0x80000000) != 0);
+    }
+    else if (opcode == OP_SUB_REG_REG || opcode == OP_SUB_REG_VAL) {
+        // Signed overflow for subtraction: if signs of operands are different, and sign of result is different from first operand
+        overflow_flag = (((operand1 ^ operand2) & 0x80000000) != 0 && ((operand1 ^ result) & 0x80000000) != 0);
+    }
+    else {
+        overflow_flag = false;
+    }
 }
 
 
@@ -633,6 +687,18 @@ void execute_instruction(Opcode opcode) {
             set_sign_flag_float(registers[reg1]);
         }
         break;
+    case OP_ADD_REG_VAL:
+        reg1 = decode_register();
+        value_double = decode_value_double();
+        if (reg1 != REG_INVALID) {
+            double result = registers[reg1] + value_double;
+            set_carry_flag(result, registers[reg1], value_double, opcode);
+            set_overflow_flag(result, registers[reg1], value_double, opcode);
+            registers[reg1] = result;
+            set_zero_flag_float(registers[reg1]);
+            set_sign_flag_float(registers[reg1]);
+        }
+        break;
     case OP_SUB_REG_REG:
         reg1 = decode_register();
         reg2 = decode_register();
@@ -640,6 +706,18 @@ void execute_instruction(Opcode opcode) {
             double result = registers[reg1] - registers[reg2];
             set_carry_flag(result, registers[reg1], registers[reg2], opcode);
             set_overflow_flag(result, registers[reg1], registers[reg2], opcode);
+            registers[reg1] = result;
+            set_zero_flag_float(registers[reg1]);
+            set_sign_flag_float(registers[reg1]);
+        }
+        break;
+    case OP_SUB_REG_VAL:
+        reg1 = decode_register();
+        value_double = decode_value_double();
+        if (reg1 != REG_INVALID) {
+            double result = registers[reg1] - value_double;
+            set_carry_flag(result, registers[reg1], value_double, opcode);
+            set_overflow_flag(result, registers[reg1], value_double, opcode);
             registers[reg1] = result;
             set_zero_flag_float(registers[reg1]);
             set_sign_flag_float(registers[reg1]);
@@ -657,6 +735,18 @@ void execute_instruction(Opcode opcode) {
             set_sign_flag_float(registers[reg1]);
         }
         break;
+    case OP_MUL_REG_VAL:
+        reg1 = decode_register();
+        value_double = decode_value_double();
+        if (reg1 != REG_INVALID) {
+            double result = registers[reg1] * value_double;
+            set_carry_flag(result, registers[reg1], value_double, opcode);
+            set_overflow_flag(result, registers[reg1], value_double, opcode);
+            registers[reg1] = result;
+            set_zero_flag_float(registers[reg1]);
+            set_sign_flag_float(registers[reg1]);
+        }
+        break;
     case OP_DIV_REG_REG:
         reg1 = decode_register();
         reg2 = decode_register();
@@ -665,6 +755,24 @@ void execute_instruction(Opcode opcode) {
                 double result = registers[reg1] / registers[reg2];
                 set_carry_flag(result, registers[reg1], registers[reg2], opcode);
                 set_overflow_flag(result, registers[reg1], registers[reg2], opcode);
+                registers[reg1] = result;
+                set_zero_flag_float(registers[reg1]);
+                set_sign_flag_float(registers[reg1]);
+            }
+            else {
+                printf("Division by zero!\n");
+                running = false;
+            }
+        }
+        break;
+    case OP_DIV_REG_VAL:
+        reg1 = decode_register();
+        value_double = decode_value_double();
+        if (reg1 != REG_INVALID) {
+            if (fabs(value_double) > 1e-9) {
+                double result = registers[reg1] / value_double;
+                set_carry_flag(result, registers[reg1], value_double, opcode);
+                set_overflow_flag(result, registers[reg1], value_double, opcode);
                 registers[reg1] = result;
                 set_zero_flag_float(registers[reg1]);
                 set_sign_flag_float(registers[reg1]);
@@ -693,34 +801,124 @@ void execute_instruction(Opcode opcode) {
             }
         }
         break;
-    case OP_AND_REG_REG:
-    case OP_OR_REG_REG:
-    case OP_XOR_REG_REG:
-    case OP_NOT_REG:
-    case OP_TEST_REG_REG:
-    case OP_TEST_REG_VAL:
-    case OP_MOVZX_REG_REG:
-    case OP_MOVZX_REG_MEM:
-    case OP_MOVSX_REG_REG:
-    case OP_MOVSX_REG_MEM:
-    case OP_INC_REG:
-    case OP_DEC_REG:
-    case OP_INC_MEM:
-    case OP_DEC_MEM:
-    case OP_SHL_REG_REG:
-    case OP_SHL_REG_VAL:
-    case OP_SHR_REG_REG:
-    case OP_SHR_REG_VAL:
-    case OP_SAR_REG_REG:
-    case OP_SAR_REG_VAL:
-    case OP_ROL_REG_REG:
-    case OP_ROL_REG_VAL:
-    case OP_ROR_REG_REG:
-    case OP_ROR_REG_VAL:
-        printf("Opcode %d removed or not applicable for float operations.\n", opcode);
-        running = false;
+    case OP_MOD_REG_VAL:
+        reg1 = decode_register();
+        value_double = decode_value_double();
+        if (reg1 != REG_INVALID) {
+            if (fabs(value_double) > 1e-9) {
+                double result = fmod(registers[reg1], value_double);
+                set_carry_flag(result, registers[reg1], value_double, opcode);
+                set_overflow_flag(result, registers[reg1], value_double, opcode);
+                registers[reg1] = result;
+                set_zero_flag_float(registers[reg1]);
+                set_sign_flag_float(registers[reg1]);
+            }
+            else {
+                printf("Modulo by zero!\n");
+                running = false;
+            }
+        }
         break;
-
+    case OP_AND_REG_REG: {
+        reg1 = decode_register();
+        reg2 = decode_register();
+        if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
+            uint32_t val1 = (uint32_t)registers[reg1];
+            uint32_t val2 = (uint32_t)registers[reg2];
+            uint32_t result = val1 & val2;
+            registers[reg1] = (double)result;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, val2, opcode);
+            set_overflow_flag_int(result, val1, val2, opcode);
+        }
+        break;
+    }
+    case OP_AND_REG_VAL: {
+        reg1 = decode_register();
+        value_uint32 = decode_value_uint32(); // Decode value as uint32_t for bitwise
+        if (reg1 != REG_INVALID) {
+            uint32_t val1 = (uint32_t)registers[reg1];
+            uint32_t result = val1 & value_uint32;
+            registers[reg1] = (double)result;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, value_uint32, opcode);
+            set_overflow_flag_int(result, val1, value_uint32, opcode);
+        }
+        break;
+    }
+    case OP_OR_REG_REG: {
+        reg1 = decode_register();
+        reg2 = decode_register();
+        if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
+            uint32_t val1 = (uint32_t)registers[reg1];
+            uint32_t val2 = (uint32_t)registers[reg2];
+            uint32_t result = val1 | val2;
+            registers[reg1] = (double)result;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, val2, opcode);
+            set_overflow_flag_int(result, val1, val2, opcode);
+        }
+        break;
+    }
+    case OP_OR_REG_VAL: {
+        reg1 = decode_register();
+        value_uint32 = decode_value_uint32(); // Decode value as uint32_t for bitwise
+        if (reg1 != REG_INVALID) {
+            uint32_t val1 = (uint32_t)registers[reg1];
+            uint32_t result = val1 | value_uint32;
+            registers[reg1] = (double)result;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, value_uint32, opcode);
+            set_overflow_flag_int(result, val1, value_uint32, opcode);
+        }
+        break;
+    }
+    case OP_XOR_REG_REG: {
+        reg1 = decode_register();
+        reg2 = decode_register();
+        if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
+            uint32_t val1 = (uint32_t)registers[reg1];
+            uint32_t val2 = (uint32_t)registers[reg2];
+            uint32_t result = val1 ^ val2;
+            registers[reg1] = (double)result;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, val2, opcode);
+            set_overflow_flag_int(result, val1, val2, opcode);
+        }
+        break;
+    }
+    case OP_XOR_REG_VAL: {
+        reg1 = decode_register();
+        value_uint32 = decode_value_uint32(); // Decode value as uint32_t for bitwise
+        if (reg1 != REG_INVALID) {
+            uint32_t val1 = (uint32_t)registers[reg1];
+            uint32_t result = val1 ^ value_uint32;
+            registers[reg1] = (double)result;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, value_uint32, opcode);
+            set_overflow_flag_int(result, val1, value_uint32, opcode);
+        }
+        break;
+    }
+    case OP_NOT_REG: {
+        reg1 = decode_register();
+        if (reg1 != REG_INVALID) {
+            uint32_t val1 = (uint32_t)registers[reg1];
+            uint32_t result = ~val1;
+            registers[reg1] = (double)result;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, 0, opcode); // no carry relevant for NOT
+            set_overflow_flag_int(result, val1, 0, opcode); // no overflow relevant for NOT
+        }
+        break;
+    }
     case OP_NEG_REG:
         reg1 = decode_register();
         if (reg1 != REG_INVALID) {
@@ -755,7 +953,33 @@ void execute_instruction(Opcode opcode) {
             set_overflow_flag(val1 - val2, val1, val2, opcode);
         }
         break;
-
+    case OP_TEST_REG_REG: {
+        reg1 = decode_register();
+        reg2 = decode_register();
+        if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
+            uint32_t val1 = (uint32_t)registers[reg1];
+            uint32_t val2 = (uint32_t)registers[reg2];
+            uint32_t result = val1 & val2;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, val2, opcode);
+            set_overflow_flag_int(result, val1, val2, opcode);
+        }
+        break;
+    }
+    case OP_TEST_REG_VAL: {
+        reg1 = decode_register();
+        value_uint32 = decode_value_uint32();
+        if (reg1 != REG_INVALID) {
+            uint32_t val1 = (uint32_t)registers[reg1];
+            uint32_t result = val1 & value_uint32;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, value_uint32, opcode);
+            set_overflow_flag_int(result, val1, value_uint32, opcode);
+        }
+        break;
+    }
     case OP_IMUL_REG_REG:
         reg1 = decode_register();
         reg2 = decode_register();
@@ -786,8 +1010,42 @@ void execute_instruction(Opcode opcode) {
             }
         }
         break;
-
-
+    case OP_MOVZX_REG_REG: {
+        reg_dest = decode_register();
+        reg_src = decode_register();
+        if (reg_dest != REG_INVALID && reg_src != REG_INVALID) {
+            uint32_t src_val = (uint32_t)registers[reg_src]; // Treat source as uint32_t
+            registers[reg_dest] = (double)src_val;         // Zero-extend by default when converting to double
+        }
+        break;
+    }
+    case OP_MOVZX_REG_MEM: {
+        reg_dest = decode_register();
+        address = decode_address();
+        if (reg_dest != REG_INVALID && address < MEMORY_SIZE - 4) {
+            uint32_t mem_val = *(uint32_t*)&memory[address]; // Read 32-bit from memory
+            registers[reg_dest] = (double)mem_val;          // Zero-extend to double
+        }
+        break;
+    }
+    case OP_MOVSX_REG_REG: {
+        reg_dest = decode_register();
+        reg_src = decode_register();
+        if (reg_dest != REG_INVALID && reg_src != REG_INVALID) {
+            int32_t src_val = (int32_t)registers[reg_src]; // Treat source as int32_t for sign-extend
+            registers[reg_dest] = (double)src_val;         // Sign-extend when converting to double
+        }
+        break;
+    }
+    case OP_MOVSX_REG_MEM: {
+        reg_dest = decode_register();
+        address = decode_address();
+        if (reg_dest != REG_INVALID && address < MEMORY_SIZE - 4) {
+            int32_t mem_val = *(int32_t*)&memory[address]; // Read 32-bit as signed from memory
+            registers[reg_dest] = (double)mem_val;          // Sign-extend to double
+        }
+        break;
+    }
     case OP_LEA_REG_MEM:
         reg_dest = decode_register();
         address = decode_address();
@@ -877,14 +1135,203 @@ void execute_instruction(Opcode opcode) {
             program_counter = address;
         }
         break;
-    case OP_JMP_PAR: // Parity jumps removed for float example
-    case OP_JMP_NPAR:
-        printf("Parity jumps removed for float example.\n");
-        running = false;
-        break;
     case OP_HLT:
         running = false;
         break;
+    case OP_INC_REG: {
+        reg1 = decode_register();
+        if (reg1 != REG_INVALID) {
+            registers[reg1]++;
+            set_zero_flag_float(registers[reg1]);
+            set_sign_flag_float(registers[reg1]);
+            set_carry_flag(registers[reg1], 0, 0, opcode);
+            set_overflow_flag(registers[reg1], 0, 0, opcode);
+        }
+        break;
+    }
+    case OP_DEC_REG: {
+        reg1 = decode_register();
+        if (reg1 != REG_INVALID) {
+            registers[reg1]--;
+            set_zero_flag_float(registers[reg1]);
+            set_sign_flag_float(registers[reg1]);
+            set_carry_flag(registers[reg1], 0, 0, opcode);
+            set_overflow_flag(registers[reg1], 0, 0, opcode);
+        }
+        break;
+    }
+    case OP_INC_MEM: {
+        address = decode_address();
+        if (address < MEMORY_SIZE - 8) {
+            double val = *(double*)&memory[address];
+            val++;
+            *(double*)&memory[address] = val;
+        }
+        break;
+    }
+    case OP_DEC_MEM: {
+        address = decode_address();
+        if (address < MEMORY_SIZE - 8) {
+            double val = *(double*)&memory[address];
+            val--;
+            *(double*)&memory[address] = val;
+        }
+        break;
+    }
+    case OP_SHL_REG_REG: {
+        reg1 = decode_register();
+        reg2 = decode_register();
+        if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
+            uint32_t val1 = (uint32_t)registers[reg1];
+            uint32_t shift_amount = (uint32_t)registers[reg2];
+            uint32_t result = val1 << (shift_amount & 0x1F); // Ensure shift amount is within 0-31 bits
+            registers[reg1] = (double)result;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, shift_amount, opcode); // Carry flag after shift (can be refined)
+            set_overflow_flag_int(result, val1, shift_amount, opcode); // Overflow flag not typically meaningful for shifts
+        }
+        break;
+    }
+    case OP_SHL_REG_VAL: {
+        reg1 = decode_register();
+        value_uint32 = decode_value_uint32();
+        if (reg1 != REG_INVALID) {
+            uint32_t val1 = (uint32_t)registers[reg1];
+            uint32_t shift_amount = value_uint32;
+            uint32_t result = val1 << (shift_amount & 0x1F); // Ensure shift amount is within 0-31 bits
+            registers[reg1] = (double)result;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, shift_amount, opcode); // Carry flag after shift (can be refined)
+            set_overflow_flag_int(result, val1, shift_amount, opcode); // Overflow flag not typically meaningful for shifts
+        }
+        break;
+    }
+    case OP_SHR_REG_REG: {
+        reg1 = decode_register();
+        reg2 = decode_register();
+        if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
+            uint32_t val1 = (uint32_t)registers[reg1];
+            uint32_t shift_amount = (uint32_t)registers[reg2];
+            uint32_t result = val1 >> (shift_amount & 0x1F); // Logical shift
+            registers[reg1] = (double)result;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, shift_amount, opcode); // Carry flag after shift (can be refined)
+            set_overflow_flag_int(result, val1, shift_amount, opcode); // Overflow flag not typically meaningful for shifts
+        }
+        break;
+    }
+    case OP_SHR_REG_VAL: {
+        reg1 = decode_register();
+        value_uint32 = decode_value_uint32();
+        if (reg1 != REG_INVALID) {
+            uint32_t val1 = (uint32_t)registers[reg1];
+            uint32_t shift_amount = value_uint32;
+            uint32_t result = val1 >> (shift_amount & 0x1F); // Logical shift
+            registers[reg1] = (double)result;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, shift_amount, opcode); // Carry flag after shift (can be refined)
+            set_overflow_flag_int(result, val1, shift_amount, opcode); // Overflow flag not typically meaningful for shifts
+        }
+        break;
+    }
+    case OP_SAR_REG_REG: {
+        reg1 = decode_register();
+        reg2 = decode_register();
+        if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
+            int32_t val1 = (int32_t)registers[reg1]; // Treat as signed for SAR
+            uint32_t shift_amount = (uint32_t)registers[reg2];
+            int32_t result = val1 >> (shift_amount & 0x1F); // Arithmetic shift
+            registers[reg1] = (double)result;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, shift_amount, opcode); // Carry flag after shift (can be refined)
+            set_overflow_flag_int(result, val1, shift_amount, opcode); // Overflow flag not typically meaningful for shifts
+        }
+        break;
+    }
+    case OP_SAR_REG_VAL: {
+        reg1 = decode_register();
+        value_uint32 = decode_value_uint32();
+        if (reg1 != REG_INVALID) {
+            int32_t val1 = (int32_t)registers[reg1]; // Treat as signed for SAR
+            uint32_t shift_amount = value_uint32;
+            int32_t result = val1 >> (shift_amount & 0x1F); // Arithmetic shift
+            registers[reg1] = (double)result;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, shift_amount, opcode); // Carry flag after shift (can be refined)
+            set_overflow_flag_int(result, val1, shift_amount, opcode); // Overflow flag not typically meaningful for shifts
+        }
+        break;
+    }
+    case OP_ROL_REG_REG: {
+        reg1 = decode_register();
+        reg2 = decode_register();
+        if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
+            uint32_t val1 = (uint32_t)registers[reg1];
+            uint32_t shift_amount = (uint32_t)registers[reg2];
+            uint32_t bits = shift_amount & 0x1F; // Effective rotation bits (0-31)
+            uint32_t result = (val1 << bits) | (val1 >> (32 - bits));
+            registers[reg1] = (double)result;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, shift_amount, opcode); // Carry flag after rotation (can be refined)
+            set_overflow_flag_int(result, val1, shift_amount, opcode); // Overflow flag not typically meaningful for rotations
+        }
+        break;
+    }
+    case OP_ROL_REG_VAL: {
+        reg1 = decode_register();
+        value_uint32 = decode_value_uint32();
+        if (reg1 != REG_INVALID) {
+            uint32_t val1 = (uint32_t)registers[reg1];
+            uint32_t shift_amount = value_uint32;
+            uint32_t bits = shift_amount & 0x1F; // Effective rotation bits (0-31)
+            uint32_t result = (val1 << bits) | (val1 >> (32 - bits));
+            registers[reg1] = (double)result;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, shift_amount, opcode); // Carry flag after rotation (can be refined)
+            set_overflow_flag_int(result, val1, shift_amount, opcode); // Overflow flag not typically meaningful for rotations
+        }
+        break;
+    }
+    case OP_ROR_REG_REG: {
+        reg1 = decode_register();
+        reg2 = decode_register();
+        if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
+            uint32_t val1 = (uint32_t)registers[reg1];
+            uint32_t shift_amount = (uint32_t)registers[reg2];
+            uint32_t bits = shift_amount & 0x1F; // Effective rotation bits (0-31)
+            uint32_t result = (val1 >> bits) | (val1 << (32 - bits));
+            registers[reg1] = (double)result;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, shift_amount, opcode); // Carry flag after rotation (can be refined)
+            set_overflow_flag_int(result, val1, shift_amount, opcode); // Overflow flag not typically meaningful for rotations
+        }
+        break;
+    }
+    case OP_ROR_REG_VAL: {
+        reg1 = decode_register();
+        value_uint32 = decode_value_uint32();
+        if (reg1 != REG_INVALID) {
+            uint32_t val1 = (uint32_t)registers[reg1];
+            uint32_t shift_amount = value_uint32;
+            uint32_t bits = shift_amount & 0x1F; // Effective rotation bits (0-31)
+            uint32_t result = (val1 >> bits) | (val1 << (32 - bits));
+            registers[reg1] = (double)result;
+            set_zero_flag_int(result);
+            set_sign_flag_int(result);
+            set_carry_flag_int(result, val1, shift_amount, opcode); // Carry flag after rotation (can be refined)
+            set_overflow_flag_int(result, val1, shift_amount, opcode); // Overflow flag not typically meaningful for rotations
+        }
+        break;
+    }
 
     case OP_RND_REG: {
         reg1 = decode_register();
@@ -1284,21 +1731,57 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2) {
         }
     }
     if (strcmp(op_str, "ADD") == 0) {
-        if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_ADD_REG_REG;
+        if (operand1 && operand2 && is_register_str(operand1)) {
+            if (is_register_str(operand2)) return OP_ADD_REG_REG;
+            else return OP_ADD_REG_VAL;
+        }
     }
     if (strcmp(op_str, "SUB") == 0) {
-        if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_SUB_REG_REG;
+        if (operand1 && operand2 && is_register_str(operand1)) {
+            if (is_register_str(operand2)) return OP_SUB_REG_REG;
+            else return OP_SUB_REG_VAL;
+        }
     }
     if (strcmp(op_str, "MUL") == 0) {
-        if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MUL_REG_REG;
+        if (operand1 && operand2 && is_register_str(operand1)) {
+            if (is_register_str(operand2)) return OP_MUL_REG_REG;
+            else return OP_MUL_REG_VAL;
+        }
     }
     if (strcmp(op_str, "DIV") == 0) {
-        if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_DIV_REG_REG;
+        if (operand1 && operand2 && is_register_str(operand1)) {
+            if (is_register_str(operand2)) return OP_DIV_REG_REG;
+            else return OP_DIV_REG_VAL;
+        }
     }
     if (strcmp(op_str, "MOD") == 0) {
-        if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MOD_REG_REG;
+        if (operand1 && operand2 && is_register_str(operand1)) {
+            if (is_register_str(operand2)) return OP_MOD_REG_REG;
+            else return OP_MOD_REG_VAL;
+        }
+    }
+    if (strcmp(op_str, "AND") == 0) {
+        if (operand1 && operand2 && is_register_str(operand1)) {
+            if (is_register_str(operand2)) return OP_AND_REG_REG;
+            else return OP_AND_REG_VAL;
+        }
+    }
+    if (strcmp(op_str, "OR") == 0) {
+        if (operand1 && operand2 && is_register_str(operand1)) {
+            if (is_register_str(operand2)) return OP_OR_REG_REG;
+            else return OP_OR_REG_VAL;
+        }
+    }
+    if (strcmp(op_str, "XOR") == 0) {
+        if (operand1 && operand2 && is_register_str(operand1)) {
+            if (is_register_str(operand2)) return OP_XOR_REG_REG;
+            else return OP_XOR_REG_VAL;
+        }
     }
 
+    if (strcmp(op_str, "NOT") == 0) {
+        if (operand1 && is_register_str(operand1)) return OP_NOT_REG;
+    }
     if (strcmp(op_str, "NEG") == 0) {
         if (operand1 && is_register_str(operand1)) return OP_NEG_REG;
     }
@@ -1308,16 +1791,33 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2) {
             else return OP_CMP_REG_VAL;
         }
     }
-
+    if (strcmp(op_str, "TEST") == 0) {
+        if (operand1 && operand2 && is_register_str(operand1)) {
+            if (is_register_str(operand2)) return OP_TEST_REG_REG;
+            else return OP_TEST_REG_VAL;
+        }
+    }
     if (strcmp(op_str, "IMUL") == 0) {
         if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_IMUL_REG_REG;
     }
     if (strcmp(op_str, "IDIV") == 0) {
         if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_IDIV_REG_REG;
     }
+    if (strcmp(op_str, "MOVZX") == 0) {
+        if (operand1 && operand2 && is_register_str(operand1)) {
+            if (is_register_str(operand2)) return OP_MOVZX_REG_REG;
+            else if (is_memory_address_str(operand2)) return OP_MOVZX_REG_MEM;
+        }
+    }
+    if (strcmp(op_str, "MOVSX") == 0) {
+        if (operand1 && operand2 && is_register_str(operand1)) {
+            if (is_register_str(operand2)) return OP_MOVSX_REG_REG;
+            else if (is_memory_address_str(operand2)) return OP_MOVSX_REG_MEM;
+        }
+    }
 
     if (strcmp(op_str, "LEA") == 0) {
-        if (operand1 && operand2 && is_register_str(operand1) && is_memory_address_str(operand2)) return OP_LEA_REG_MEM;
+        if (operand1 && operand2 && is_register_str(operand1)) return OP_LEA_REG_MEM;
     }
     if (strcmp(op_str, "INT") == 0) {
         if (operand1) return OP_INT;
@@ -1364,6 +1864,45 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2) {
     }
 
     if (strcmp(op_str, "HLT") == 0) return OP_HLT;
+
+    if (strcmp(op_str, "INC") == 0) {
+        if (operand1 && is_register_str(operand1)) return OP_INC_REG;
+        else if (is_memory_address_str(operand1)) return OP_INC_MEM;
+    }
+    if (strcmp(op_str, "DEC") == 0) {
+        if (operand1 && is_register_str(operand1)) return OP_DEC_REG;
+        else if (is_memory_address_str(operand1)) return OP_DEC_MEM;
+    }
+    if (strcmp(op_str, "SHL") == 0) {
+        if (operand1 && operand2 && is_register_str(operand1)) {
+            if (is_register_str(operand2)) return OP_SHL_REG_REG;
+            else return OP_SHL_REG_VAL;
+        }
+    }
+    if (strcmp(op_str, "SHR") == 0) {
+        if (operand1 && operand2 && is_register_str(operand1)) {
+            if (is_register_str(operand2)) return OP_SHR_REG_REG;
+            else return OP_SHR_REG_VAL;
+        }
+    }
+    if (strcmp(op_str, "SAR") == 0) {
+        if (operand1 && operand2 && is_register_str(operand1)) {
+            if (is_register_str(operand2)) return OP_SAR_REG_REG;
+            else return OP_SAR_REG_VAL;
+        }
+    }
+    if (strcmp(op_str, "ROL") == 0) {
+        if (operand1 && operand2 && is_register_str(operand1)) {
+            if (is_register_str(operand2)) return OP_ROL_REG_REG;
+            else return OP_ROL_REG_VAL;
+        }
+    }
+    if (strcmp(op_str, "ROR") == 0) {
+        if (operand1 && operand2 && is_register_str(operand1)) {
+            if (is_register_str(operand2)) return OP_ROR_REG_REG;
+            else return OP_ROR_REG_VAL;
+        }
+    }
 
     if (strcmp(op_str, "RND") == 0) {
         if (operand1 && is_register_str(operand1)) return OP_RND_REG;
@@ -1906,16 +2445,35 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
 
         // Increment program counter based on instruction length
         switch (opcode) {
-        case OP_MOV_REG_VAL: program_counter += 9; break; // Opcode (1) + Reg (1) + Double (8)
+        case OP_MOV_REG_VAL:
+        case OP_ADD_REG_VAL:
+        case OP_SUB_REG_VAL:
+        case OP_MUL_REG_VAL:
+        case OP_DIV_REG_VAL:
+        case OP_MOD_REG_VAL:
+        case OP_CMP_REG_VAL:
+        case OP_TEST_REG_VAL:
+            program_counter += 9; break; // Opcode (1) + Reg (1) + Double (8)
         case OP_MOV_REG_REG:
         case OP_ADD_REG_REG:
         case OP_SUB_REG_REG:
         case OP_MUL_REG_REG:
         case OP_DIV_REG_REG:
         case OP_MOD_REG_REG:
+        case OP_AND_REG_REG:
+        case OP_OR_REG_REG:
+        case OP_XOR_REG_REG:
         case OP_CMP_REG_REG:
+        case OP_TEST_REG_REG:
         case OP_IMUL_REG_REG:
         case OP_IDIV_REG_REG:
+        case OP_MOVZX_REG_REG:
+        case OP_MOVSX_REG_REG:
+        case OP_SHL_REG_REG:
+        case OP_SHR_REG_REG:
+        case OP_SAR_REG_REG:
+        case OP_ROL_REG_REG:
+        case OP_ROR_REG_REG:
         case OP_MATH_ADD:
         case OP_MATH_SUB:
         case OP_MATH_MUL:
@@ -1924,13 +2482,17 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_MATH_POW:
         case OP_MATH_MIN:
         case OP_MATH_MAX:
-            program_counter += 2; break;
-        case OP_CMP_REG_VAL:
+            program_counter += 2; break; // Opcode (1) + 2 Regs (2)
         case OP_MOV_REG_MEM:
         case OP_MOV_MEM_REG:
         case OP_LEA_REG_MEM:
-            program_counter += 9; break;
+        case OP_MOVZX_REG_MEM:
+        case OP_MOVSX_REG_MEM:
+            program_counter += 5; break; // Opcode (1) + Reg (1) + Address (4)
+        case OP_NOT_REG:
         case OP_NEG_REG:
+        case OP_INC_REG:
+        case OP_DEC_REG:
         case OP_RND_REG:
         case OP_PUSH_REG:
         case OP_POP_REG:
@@ -1948,8 +2510,13 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_MATH_CEIL:
         case OP_MATH_ROUND:
         case OP_MATH_NEG:
-            program_counter += 1; break;
-        case OP_INT: program_counter += 4; break;
+        case OP_SHL_REG_VAL:
+        case OP_SHR_REG_VAL:
+        case OP_SAR_REG_VAL:
+        case OP_ROL_REG_VAL:
+        case OP_ROR_REG_VAL:
+            program_counter += 2; break; // Opcode (1) + Reg (1) or Value (1)
+        case OP_INT: program_counter += 4; break; // Opcode (1) + Value (4)
         case OP_JMP:
         case OP_JMP_NZ:
         case OP_JMP_Z:
@@ -1964,11 +2531,14 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_JMP_G:
         case OP_JMP_L:
         case OP_CALL_ADDR:
-            program_counter += 4; break;
+            program_counter += 4; break; // Opcode (1) + Address (4)
+        case OP_INC_MEM:
+        case OP_DEC_MEM:
+            program_counter += 4; break; // Opcode (1) + Address (4)
         case OP_NOP:
         case OP_HLT:
         case OP_RET:
-            break;
+            break; // Opcode (1)
         default:
             fprintf(stderr, "Assembler Error (Pass 1): Unhandled opcode size calculation for '%s' on line %d.\n", token, line_number);
             fclose(asm_file);
@@ -2075,7 +2645,15 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
 
         // Write instruction operands to memory based on opcode
         switch (opcode) {
-        case OP_MOV_REG_VAL: {
+        case OP_MOV_REG_VAL:
+        case OP_ADD_REG_VAL:
+        case OP_SUB_REG_VAL:
+        case OP_MUL_REG_VAL:
+        case OP_DIV_REG_VAL:
+        case OP_MOD_REG_VAL:
+        case OP_CMP_REG_VAL:
+        case OP_TEST_REG_VAL:
+        {
             RegisterIndex reg = register_from_string(reg1_str);
             if (reg == REG_INVALID) {
                 fprintf(stderr, "Error: Invalid register '%s' in MOV instruction on line %d.\n", reg1_str, line_number);
@@ -2095,9 +2673,20 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_MUL_REG_REG:
         case OP_DIV_REG_REG:
         case OP_MOD_REG_REG:
+        case OP_AND_REG_REG:
+        case OP_OR_REG_REG:
+        case OP_XOR_REG_REG:
         case OP_CMP_REG_REG:
+        case OP_TEST_REG_REG:
         case OP_IMUL_REG_REG:
         case OP_IDIV_REG_REG:
+        case OP_MOVZX_REG_REG:
+        case OP_MOVSX_REG_REG:
+        case OP_SHL_REG_REG:
+        case OP_SHR_REG_REG:
+        case OP_SAR_REG_REG:
+        case OP_ROL_REG_REG:
+        case OP_ROR_REG_REG:
         case OP_MATH_ADD:
         case OP_MATH_SUB:
         case OP_MATH_MUL:
@@ -2125,7 +2714,10 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
             memory[program_counter++] = (uint8_t)reg2;
             break;
         }
-        case OP_MOV_REG_MEM: {
+        case OP_MOV_REG_MEM:
+        case OP_MOVZX_REG_MEM:
+        case OP_MOVSX_REG_MEM:
+        {
             RegisterIndex reg = register_from_string(reg1_str);
             char* addr_str = reg2_str;
             if (reg == REG_INVALID) {
@@ -2155,7 +2747,10 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
             memory[program_counter++] = (uint8_t)reg;
             break;
         }
+        case OP_NOT_REG:
         case OP_NEG_REG:
+        case OP_INC_REG:
+        case OP_DEC_REG:
         case OP_RND_REG:
         case OP_PUSH_REG:
         case OP_POP_REG:
@@ -2173,6 +2768,11 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_MATH_CEIL:
         case OP_MATH_ROUND:
         case OP_MATH_NEG:
+        case OP_SHL_REG_VAL:
+        case OP_SHR_REG_VAL:
+        case OP_SAR_REG_VAL:
+        case OP_ROL_REG_VAL:
+        case OP_ROR_REG_VAL:
         {
             RegisterIndex reg = register_from_string(reg1_str);
             if (reg == REG_INVALID) {
@@ -2182,20 +2782,6 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
                 return -1;
             }
             memory[program_counter++] = (uint8_t)reg;
-            break;
-        }
-        case OP_CMP_REG_VAL: {
-            RegisterIndex reg = register_from_string(reg1_str);
-            double value = parse_value_double(reg2_str); // Parse value operand as double
-            if (reg == REG_INVALID) {
-                fprintf(stderr, "Error: Invalid register '%s' in CMP instruction on line %d.\n", reg1_str, line_number);
-                fclose(asm_file);
-                fclose(rom_file);
-                return -1;
-            }
-            memory[program_counter++] = (uint8_t)reg;
-            *(double*)&memory[program_counter] = value; // Write double value to memory
-            program_counter += 8;
             break;
         }
         case OP_INT: {
@@ -2219,6 +2805,14 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_JMP_L:
         case OP_CALL_ADDR: {
             uint32_t address = parse_address(reg1_str); // Parse jump address as integer address
+            *(uint32_t*)&memory[program_counter] = address;
+            program_counter += 4;
+            break;
+        }
+        case OP_INC_MEM:
+        case OP_DEC_MEM:
+        {
+            uint32_t address = parse_address(reg1_str);
             *(uint32_t*)&memory[program_counter] = address;
             program_counter += 4;
             break;
