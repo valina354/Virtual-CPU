@@ -21,7 +21,7 @@
 #define MEMORY_SIZE (16384 * 1024) // 16MB Memory
 #define NUM_GENERAL_REGISTERS 32
 #define NUM_F_REGISTERS 4
-#define CPU_VER 3 // CPU Version 2
+#define CPU_VER 3 // CPU Version 3 (Buffer & String Lib Support)
 #define MAX_PREPROCESSOR_DEPTH 10 // Maximum depth for nested preprocessor directives
 
 // CPU Speed Simulation
@@ -126,6 +126,14 @@ typedef enum {
     OP_MATH_MAX,
     OP_MATH_NEG,
 
+    // String Standard Library Opcodes
+    OP_STR_LEN_REG_MEM,     // STRLEN reg, mem_addr (reg = strlen(mem_addr))
+    OP_STR_CPY_MEM_MEM,     // STRCPY dest_mem_addr, src_mem_addr (strcpy(dest, src))
+    OP_STR_CAT_MEM_MEM,     // STRCAT dest_mem_addr, src_mem_addr (strcat(dest, src))
+    OP_STR_CMP_REG_MEM_MEM, // STRCMP reg, mem_addr1, mem_addr2 (reg = strcmp(str1, str2))
+    OP_STR_NCPY_MEM_MEM_REG, // STRNCPY dest_mem_addr, src_mem_addr, num (strncpy(dest, src, num))
+    OP_STR_NCAT_MEM_MEM_REG, // STRNCAT dest_mem_addr, src_mem_addr, num (strncat(dest, src, num))
+
     OP_INVALID       // Invalid Opcode
 } Opcode;
 
@@ -206,6 +214,14 @@ typedef struct {
     char value[256];
 } StringDefinition;
 
+// Buffer Definition Structure
+typedef struct {
+    char name[32];
+    uint32_t address;
+    uint32_t size;
+} BufferDefinition;
+
+
 uint8_t memory[MEMORY_SIZE];                  // CPU Memory
 double registers[NUM_TOTAL_REGISTERS];       // CPU Registers
 uint32_t program_counter = 0;                 // Program Counter
@@ -220,6 +236,8 @@ LabelDefinition labels[1024];                  // Label Definitions
 int label_count = 0;                           // Label Count
 StringDefinition strings[1024];                 // String Definitions
 int string_count = 0;                          // String Count
+BufferDefinition buffers[1024];                 // Buffer Definitions
+int buffer_count = 0;                          // Buffer Count
 uint32_t data_section_start = 0;              // Start of Data Section in Memory
 
 int cursor_x = 0;                             // Cursor X Position
@@ -563,7 +581,6 @@ uint32_t decode_address() {
 }
 
 // Flag Setting Functions
-
 void set_zero_flag_float(double result) {
     zero_flag = (fabs(result) < 1e-9);
 }
@@ -631,9 +648,9 @@ void set_overflow_flag_int(uint32_t result, uint32_t operand1, uint32_t operand2
 
 // CPU Instruction Execution
 void execute_instruction(Opcode opcode) {
-    RegisterIndex reg1, reg2, reg_dest, reg_src;
+    RegisterIndex reg1, reg2, reg3, reg_dest, reg_src; // Added reg3
     double value_double;
-    uint32_t value_uint32, address;
+    uint32_t value_uint32, address, count; // Added count
 
     switch (opcode) {
     case OP_NOP:
@@ -1665,6 +1682,76 @@ void execute_instruction(Opcode opcode) {
         }
         break;
     }
+                    // String Standard Library Implementation
+    case OP_STR_LEN_REG_MEM: {
+        reg1 = decode_register();
+        address = decode_address();
+        if (reg1 != REG_INVALID && address < MEMORY_SIZE) {
+            char* str = (char*)&memory[address];
+            registers[reg1] = (double)strlen(str);
+            set_zero_flag_float(registers[reg1]);
+            set_sign_flag_float(registers[reg1]);
+        }
+        break;
+    }
+    case OP_STR_CPY_MEM_MEM: {
+        address = decode_address(); // Destination address
+        uint32_t src_address = decode_address(); // Source address
+        if (address < MEMORY_SIZE && src_address < MEMORY_SIZE) {
+            char* dest_str = (char*)&memory[address];
+            char* src_str = (char*)&memory[src_address];
+            strcpy(dest_str, src_str); // Potential buffer overflow if dest is too small - needs bounds checking in real CPU
+        }
+        break;
+    }
+    case OP_STR_CAT_MEM_MEM: {
+        address = decode_address(); // Destination address
+        uint32_t src_address = decode_address(); // Source address
+        if (address < MEMORY_SIZE && src_address < MEMORY_SIZE) {
+            char* dest_str = (char*)&memory[address];
+            char* src_str = (char*)&memory[src_address];
+            strcat(dest_str, src_str); // Potential buffer overflow if dest is too small - needs bounds checking in real CPU
+        }
+        break;
+    }
+    case OP_STR_CMP_REG_MEM_MEM: {
+        reg1 = decode_register();
+        uint32_t addr1 = decode_address();
+        uint32_t addr2 = decode_address();
+        if (reg1 != REG_INVALID && addr1 < MEMORY_SIZE && addr2 < MEMORY_SIZE) {
+            char* str1 = (char*)&memory[addr1];
+            char* str2 = (char*)&memory[addr2];
+            registers[reg1] = (double)strcmp(str1, str2);
+            set_zero_flag_float(registers[reg1]);
+            set_sign_flag_float(registers[reg1]);
+        }
+        break;
+    }
+    case OP_STR_NCPY_MEM_MEM_REG: {
+        address = decode_address(); // Destination address
+        uint32_t src_address = decode_address(); // Source address
+        reg1 = decode_register(); // Number of bytes to copy from register
+        if (address < MEMORY_SIZE && src_address < MEMORY_SIZE && reg1 != REG_INVALID) {
+            char* dest_str = (char*)&memory[address];
+            char* src_str = (char*)&memory[src_address];
+            count = (uint32_t)registers[reg1];
+            strncpy(dest_str, src_str, count);
+            dest_str[count] = '\0'; // Ensure null termination
+        }
+        break;
+    }
+    case OP_STR_NCAT_MEM_MEM_REG: {
+        address = decode_address(); // Destination address
+        uint32_t src_address = decode_address(); // Source address
+        reg1 = decode_register(); // Number of bytes to append from register
+        if (address < MEMORY_SIZE && src_address < MEMORY_SIZE && reg1 != REG_INVALID) {
+            char* dest_str = (char*)&memory[address];
+            char* src_str = (char*)&memory[src_address];
+            count = (uint32_t)registers[reg1];
+            strncat(dest_str, src_str, count);
+        }
+        break;
+    }
 
     case OP_INVALID:
         printf("Invalid Opcode!\n");
@@ -1716,7 +1803,7 @@ bool is_memory_address_str(const char* str) {
 }
 
 // Convert opcode string to Opcode enum
-Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2) {
+Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, char* operand3) { // Added operand3
     if (strcmp(op_str, "NOP") == 0) return OP_NOP;
     if (strcmp(op_str, "MOV") == 0) {
         if (operand1 && operand2) {
@@ -1817,7 +1904,9 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2) {
     }
 
     if (strcmp(op_str, "LEA") == 0) {
-        if (operand1 && operand2 && is_register_str(operand1)) return OP_LEA_REG_MEM;
+        if (operand1 && operand2 && is_register_str(operand1)) {
+            if (is_memory_address_str(operand2) || get_label_address(operand2) != -1) return OP_LEA_REG_MEM;
+        }
     }
     if (strcmp(op_str, "INT") == 0) {
         if (operand1) return OP_INT;
@@ -1989,6 +2078,49 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2) {
         }
     }
 
+    // String Standard Library Opcodes Parsing
+    if (strncmp(op_str, "str.", 4) == 0) {
+        char* str_func = op_str + 4;
+        if (strcmp(str_func, "len") == 0) {
+            if (operand1 && operand2 && is_register_str(operand1) &&
+                (is_memory_address_str(operand2) || get_label_address(operand2) != -1)) // Check for label or [address]
+                return OP_STR_LEN_REG_MEM;
+        }
+        else if (strcmp(str_func, "cpy") == 0) {
+            if (operand1 && operand2 &&
+                (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && // Check for label or [address]
+                (is_memory_address_str(operand2) || get_label_address(operand2) != -1)) // Check for label or [address]
+                return OP_STR_CPY_MEM_MEM;
+        }
+        else if (strcmp(str_func, "cat") == 0) {
+            if (operand1 && operand2 &&
+                (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && // Check for label or [address]
+                (is_memory_address_str(operand2) || get_label_address(operand2) != -1)) // Check for label or [address]
+                return OP_STR_CAT_MEM_MEM;
+        }
+        else if (strcmp(str_func, "cmp") == 0) {
+            if (operand1 && operand2 && operand3 && is_register_str(operand1) &&
+                (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && // Check for label or [address]
+                (is_memory_address_str(operand3) || get_label_address(operand3) != -1)) // Check for label or [address]
+                return OP_STR_CMP_REG_MEM_MEM;
+        }
+        else if (strcmp(str_func, "ncpy") == 0) {
+            if (operand1 && operand2 && operand3 &&
+                (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && // Check for label or [address]
+                (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && // Check for label or [address]
+                is_register_str(operand3))
+                return OP_STR_NCPY_MEM_MEM_REG;
+        }
+        else if (strcmp(str_func, "ncat") == 0) {
+            if (operand1 && operand2 && operand3 &&
+                (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && // Check for label or [address]
+                (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && // Check for label or [address]
+                is_register_str(operand3))
+                return OP_STR_NCAT_MEM_MEM_REG;
+        }
+    }
+
+
     return OP_INVALID;
 }
 
@@ -2034,6 +2166,11 @@ uint32_t get_label_address(const char* label_name) {
     for (int i = 0; i < string_count; i++) {
         if (strcmp(strings[i].name, label_name) == 0) {
             return strings[i].address;
+        }
+    }
+    for (int i = 0; i < buffer_count; i++) {
+        if (strcmp(buffers[i].name, label_name) == 0) {
+            return buffers[i].address;
         }
     }
     return -1; // Label not found
@@ -2120,6 +2257,7 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
     macro_count = 0;              // Reset macro count
     label_count = 0;              // Reset label count
     string_count = 0;             // Reset string count
+    buffer_count = 0;             // Reset buffer count
     data_section_start = 0;       // Reset data section start
     uint32_t rom_offset = 0;      // ROM offset, defaults to 0
 
@@ -2129,7 +2267,7 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
     int preprocessor_depth = 0;                                 // Preprocessor nesting depth
     preprocessor_state[0] = PREPROCESSOR_STATE_NORMAL;          // Initial state is normal
 
-    // --- Pass 1: Scan for labels, macros, strings, calculate program size ---
+    // --- Pass 1: Scan for labels, macros, strings, buffers, calculate program size ---
     rewind(asm_file); // Reset file pointer to beginning
     program_counter = 0;
     while (fgets(line, sizeof(line), asm_file)) {
@@ -2271,6 +2409,48 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
             }
             else {
                 fprintf(stderr, "Error: String limit reached on line %d.\n", line_number);
+                fclose(asm_file);
+                fclose(rom_file);
+                return -1;
+            }
+            line_number++;
+            continue;
+        }
+        // Handle buffer definition directive
+        else if (strcmp(token, ".BUFFER") == 0) {
+            char* buffer_name = strtok(NULL, " ,\t\n");
+            char* buffer_size_str = strtok(NULL, " ,\t\n");
+
+            if (!buffer_name) {
+                fprintf(stderr, "Error: Missing buffer name in .BUFFER directive on line %d.\n", line_number);
+                fclose(asm_file);
+                fclose(rom_file);
+                return -1;
+            }
+            if (!buffer_size_str) {
+                fprintf(stderr, "Error: Missing buffer size in .BUFFER directive on line %d.\n", line_number);
+                fclose(asm_file);
+                fclose(rom_file);
+                return -1;
+            }
+
+            uint32_t buffer_size = parse_address(buffer_size_str);
+            if (buffer_size == 0 || buffer_size > MEMORY_SIZE) {
+                fprintf(stderr, "Error: Invalid buffer size '%u' on line %d.\n", buffer_size, line_number);
+                fclose(asm_file);
+                fclose(rom_file);
+                return -1;
+            }
+
+            if (buffer_count < 1024) {
+                strncpy(buffers[buffer_count].name, buffer_name, sizeof(buffers[buffer_count].name) - 1);
+                buffers[buffer_count].name[sizeof(buffers[buffer_count].name) - 1] = '\0';
+                buffers[buffer_count].size = buffer_size;
+                buffer_count++;
+                program_counter += buffer_size; // Reserve space in memory for buffer
+            }
+            else {
+                fprintf(stderr, "Error: Buffer limit reached on line %d.\n", line_number);
                 fclose(asm_file);
                 fclose(rom_file);
                 return -1;
@@ -2432,7 +2612,8 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
 
         char* operand1_str = strtok(NULL, " ,\t\n");
         char* operand2_str = strtok(NULL, " ,\t\n");
-        Opcode opcode = opcode_from_string(token, operand1_str, operand2_str); // Decode opcode
+        char* operand3_str = strtok(NULL, " ,\t\n"); // Added operand3
+        Opcode opcode = opcode_from_string(token, operand1_str, operand2_str, operand3_str); // Decode opcode
 
         if (opcode == OP_INVALID) {
             fprintf(stderr, "Error: Invalid opcode '%s' on line %d.\n", token, line_number);
@@ -2443,7 +2624,7 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
 
         memory[program_counter++] = (uint8_t)opcode; // Write opcode to memory
 
-        // Increment program counter based on instruction length
+        // Increment program counter based on instruction length (updated for string opcodes)
         switch (opcode) {
         case OP_MOV_REG_VAL:
         case OP_ADD_REG_VAL:
@@ -2488,6 +2669,7 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_LEA_REG_MEM:
         case OP_MOVZX_REG_MEM:
         case OP_MOVSX_REG_MEM:
+        case OP_STR_LEN_REG_MEM:
             program_counter += 5; break; // Opcode (1) + Reg (1) + Address (4)
         case OP_NOT_REG:
         case OP_NEG_REG:
@@ -2534,7 +2716,14 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
             program_counter += 4; break; // Opcode (1) + Address (4)
         case OP_INC_MEM:
         case OP_DEC_MEM:
-            program_counter += 4; break; // Opcode (1) + Address (4)
+        case OP_STR_CPY_MEM_MEM:
+        case OP_STR_CAT_MEM_MEM:
+            program_counter += 8; break; // Opcode (1) + 2 Addresses (8)
+        case OP_STR_CMP_REG_MEM_MEM:
+            program_counter += 9; break; // Opcode (1) + Reg (1) + 2 Addresses (8)
+        case OP_STR_NCPY_MEM_MEM_REG:
+        case OP_STR_NCAT_MEM_MEM_REG:
+            program_counter += 9; break; // Opcode (1) + Reg (1) + 2 Addresses (8)
         case OP_NOP:
         case OP_HLT:
         case OP_RET:
@@ -2624,6 +2813,20 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
             line_number++;
             continue;
         }
+        // Handle buffer data placement
+        if (strcmp(token, ".BUFFER") == 0) {
+            char* buffer_name = strtok(NULL, " ,\t\n");
+
+            for (int i = 0; i < buffer_count; i++) {
+                if (strcmp(buffers[i].name, buffer_name) == 0) {
+                    buffers[i].address = data_pointer; // Assign data address
+                    data_pointer += buffers[i].size;    // Increment data pointer by buffer size
+                    break;
+                }
+            }
+            line_number++;
+            continue;
+        }
         // Skip preprocessor directives and labels in pass 2, already handled in pass 1
         if (token[0] == '#' || (strchr(token, ':') != NULL && strlen(token) > 1)) {
             line_number++;
@@ -2632,7 +2835,8 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
 
         char* reg1_str = strtok(NULL, " ,\t\n");
         char* reg2_str = strtok(NULL, " ,\t\n");
-        Opcode opcode = opcode_from_string(token, reg1_str, reg2_str); // Decode opcode again
+        char* reg3_str = strtok(NULL, " ,\t\n"); // Added reg3_str
+        Opcode opcode = opcode_from_string(token, reg1_str, reg2_str, reg3_str); // Decode opcode again
 
         if (opcode == OP_INVALID) {
             fprintf(stderr, "Error: Invalid opcode '%s' on line %d (Pass 2).\n", token, line_number);
@@ -2714,9 +2918,26 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
             memory[program_counter++] = (uint8_t)reg2;
             break;
         }
+        case OP_LEA_REG_MEM:
+        {
+            RegisterIndex reg = register_from_string(reg1_str);
+            char* addr_str = reg2_str;
+            if (reg == REG_INVALID) {
+                fprintf(stderr, "Error: Invalid register '%s' in LEA instruction on line %d.\n", reg1_str, line_number);
+                fclose(asm_file);
+                fclose(rom_file);
+                return -1;
+            }
+            uint32_t address = parse_address(addr_str); // Parse memory address
+            memory[program_counter++] = (uint8_t)reg;
+            *(uint32_t*)&memory[program_counter] = address;
+            program_counter += 4; // Address is 4 bytes
+            break;
+        }
         case OP_MOV_REG_MEM:
         case OP_MOVZX_REG_MEM:
         case OP_MOVSX_REG_MEM:
+        case OP_STR_LEN_REG_MEM:
         {
             RegisterIndex reg = register_from_string(reg1_str);
             char* addr_str = reg2_str;
@@ -2815,6 +3036,39 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
             uint32_t address = parse_address(reg1_str);
             *(uint32_t*)&memory[program_counter] = address;
             program_counter += 4;
+            break;
+        }
+        case OP_STR_CPY_MEM_MEM:
+        case OP_STR_CAT_MEM_MEM: {
+            uint32_t dest_addr = parse_address(reg1_str);
+            uint32_t src_addr = parse_address(reg2_str);
+            *(uint32_t*)&memory[program_counter] = dest_addr;
+            program_counter += 4;
+            *(uint32_t*)&memory[program_counter] = src_addr;
+            program_counter += 4;
+            break;
+        }
+        case OP_STR_CMP_REG_MEM_MEM: {
+            RegisterIndex reg = register_from_string(reg1_str);
+            uint32_t addr1 = parse_address(reg2_str);
+            uint32_t addr2 = parse_address(reg3_str);
+            memory[program_counter++] = (uint8_t)reg;
+            *(uint32_t*)&memory[program_counter] = addr1;
+            program_counter += 4;
+            *(uint32_t*)&memory[program_counter] = addr2;
+            program_counter += 4;
+            break;
+        }
+        case OP_STR_NCPY_MEM_MEM_REG:
+        case OP_STR_NCAT_MEM_MEM_REG: {
+            uint32_t dest_addr = parse_address(reg1_str);
+            uint32_t src_addr = parse_address(reg2_str);
+            RegisterIndex reg = register_from_string(reg3_str);
+            *(uint32_t*)&memory[program_counter] = dest_addr;
+            program_counter += 4;
+            *(uint32_t*)&memory[program_counter] = src_addr;
+            program_counter += 4;
+            memory[program_counter++] = (uint8_t)reg;
             break;
         }
 
