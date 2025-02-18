@@ -134,6 +134,11 @@ typedef enum {
     OP_STR_NCPY_MEM_MEM_REG, // STRNCPY dest_mem_addr, src_mem_addr, num (strncpy(dest, src, num))
     OP_STR_NCAT_MEM_MEM_REG, // STRNCAT dest_mem_addr, src_mem_addr, num (strncat(dest, src, num))
 
+    // Memory Standard Library Opcodes
+    OP_MEM_CPY_MEM_MEM_REG,
+    OP_MEM_SET_MEM_REG_VAL,
+    OP_MEM_FREE_MEM,
+
     OP_INVALID       // Invalid Opcode
 } Opcode;
 
@@ -1752,6 +1757,60 @@ void execute_instruction(Opcode opcode) {
         }
         break;
     }
+    case OP_MEM_CPY_MEM_MEM_REG: {
+        uint32_t dest_address = decode_address();
+        uint32_t src_address = decode_address();
+        reg1 = decode_register(); // Count register
+        if (dest_address < MEMORY_SIZE && src_address < MEMORY_SIZE && reg1 != REG_INVALID) {
+            uint32_t count = (uint32_t)registers[reg1];
+            if (dest_address + count > MEMORY_SIZE || src_address + count > MEMORY_SIZE) {
+                printf("Error: MEMCPY out of memory bounds!\n");
+                running = false;
+                break;
+            }
+            memcpy(&memory[dest_address], &memory[src_address], count);
+        }
+        break;
+    }
+    case OP_MEM_SET_MEM_REG_VAL: {
+        uint32_t dest_address = decode_address();
+        reg1 = decode_register(); // Value register
+        value_uint32 = decode_value_uint32(); // Count value (immediate)
+        if (dest_address < MEMORY_SIZE && reg1 != REG_INVALID) {
+            uint8_t value = (uint8_t)registers[reg1]; // Treat value as a byte
+            if (dest_address + value_uint32 > MEMORY_SIZE) {
+                printf("Error: MEMSET out of memory bounds!\n");
+                running = false;
+                break;
+            }
+            memset(&memory[dest_address], value, value_uint32);
+        }
+        break;
+    }
+    case OP_MEM_FREE_MEM: { // <--- ADD THIS CASE
+        uint32_t address = decode_address();
+        if (address < MEMORY_SIZE) {
+            // Get buffer definition to know the size
+            uint32_t buffer_size = 0;
+            for (int i = 0; i < buffer_count; i++) {
+                if (buffers[i].address == address) {
+                    buffer_size = buffers[i].size;
+                    break;
+                }
+            }
+            if (buffer_size > 0) {
+                memset(&memory[address], 0, buffer_size); // Clear the buffer with null bytes
+            }
+            else {
+                printf("Warning: mem.free called on address without known buffer size.\n");
+            }
+        }
+        else {
+            printf("Error: MEMFREE address out of memory bounds!\n");
+            running = false;
+        }
+        break;
+    }
 
     case OP_INVALID:
         printf("Invalid Opcode!\n");
@@ -1803,7 +1862,7 @@ bool is_memory_address_str(const char* str) {
 }
 
 // Convert opcode string to Opcode enum
-Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, char* operand3) { // Added operand3
+Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, char* operand3, char* operand4) { // Added operand3
     if (strcmp(op_str, "NOP") == 0) return OP_NOP;
     if (strcmp(op_str, "MOV") == 0) {
         if (operand1 && operand2) {
@@ -2117,6 +2176,28 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, ch
                 (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && // Check for label or [address]
                 is_register_str(operand3))
                 return OP_STR_NCAT_MEM_MEM_REG;
+        }
+    }
+    else if (strncmp(op_str, "mem.", 4) == 0) {
+        char* mem_func = op_str + 4;
+        if (strcmp(mem_func, "cpy") == 0) {
+            if (operand1 && operand2 && operand3 &&
+                (is_memory_address_str(operand1) || get_label_address(operand1) != -1) &&
+                (is_memory_address_str(operand2) || get_label_address(operand2) != -1) &&
+                is_register_str(operand3))
+                return OP_MEM_CPY_MEM_MEM_REG;
+        }
+        else if (strcmp(mem_func, "set") == 0) {
+            if (operand1 && operand2 && operand3 &&
+                (is_memory_address_str(operand1) || get_label_address(operand1) != -1) &&
+                is_register_str(operand2) &&
+                !is_register_str(operand3) && !is_memory_address_str(operand3)) // Value is immediate
+                return OP_MEM_SET_MEM_REG_VAL;
+        }
+        else if (strcmp(mem_func, "free") == 0) {
+            if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1)) {
+                return OP_MEM_FREE_MEM;
+            }
         }
     }
 
@@ -2612,8 +2693,9 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
 
         char* operand1_str = strtok(NULL, " ,\t\n");
         char* operand2_str = strtok(NULL, " ,\t\n");
-        char* operand3_str = strtok(NULL, " ,\t\n"); // Added operand3
-        Opcode opcode = opcode_from_string(token, operand1_str, operand2_str, operand3_str); // Decode opcode
+        char* operand3_str = strtok(NULL, " ,\t\n");
+        char* operand4_str = strtok(NULL, " ,\t\n");
+        Opcode opcode = opcode_from_string(token, operand1_str, operand2_str, operand3_str, operand4_str); // Decode opcode
 
         if (opcode == OP_INVALID) {
             fprintf(stderr, "Error: Invalid opcode '%s' on line %d.\n", token, line_number);
@@ -2724,6 +2806,12 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_STR_NCPY_MEM_MEM_REG:
         case OP_STR_NCAT_MEM_MEM_REG:
             program_counter += 9; break; // Opcode (1) + Reg (1) + 2 Addresses (8)
+        case OP_MEM_CPY_MEM_MEM_REG:
+            program_counter += 9; break; // Opcode (1) + 2 Addresses (8) + Reg (1)
+        case OP_MEM_SET_MEM_REG_VAL:
+            program_counter += 10; break; // Opcode (1) + Address (4) + Reg (1) + Value (4) - assuming value is uint32 immediate
+        case OP_MEM_FREE_MEM:
+            program_counter += 5; break; // Opcode (1) + Address (4)
         case OP_NOP:
         case OP_HLT:
         case OP_RET:
@@ -2835,8 +2923,9 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
 
         char* reg1_str = strtok(NULL, " ,\t\n");
         char* reg2_str = strtok(NULL, " ,\t\n");
-        char* reg3_str = strtok(NULL, " ,\t\n"); // Added reg3_str
-        Opcode opcode = opcode_from_string(token, reg1_str, reg2_str, reg3_str); // Decode opcode again
+        char* reg3_str = strtok(NULL, " ,\t\n");
+        char* reg4_str = strtok(NULL, " ,\t\n");
+        Opcode opcode = opcode_from_string(token, reg1_str, reg2_str, reg3_str, reg4_str); // Decode opcode again
 
         if (opcode == OP_INVALID) {
             fprintf(stderr, "Error: Invalid opcode '%s' on line %d (Pass 2).\n", token, line_number);
@@ -3069,6 +3158,48 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
             *(uint32_t*)&memory[program_counter] = src_addr;
             program_counter += 4;
             memory[program_counter++] = (uint8_t)reg;
+            break;
+        }
+        case OP_MEM_CPY_MEM_MEM_REG: {
+            uint32_t dest_addr = parse_address(reg1_str);
+            uint32_t src_addr = parse_address(reg2_str);
+            RegisterIndex reg_count = register_from_string(reg3_str);
+            if (reg_count == REG_INVALID) {
+                fprintf(stderr, "Error: Invalid register '%s' for count in MEMCPY on line %d.\n", reg3_str, line_number);
+                fclose(asm_file);
+                fclose(rom_file);
+                return -1;
+            }
+            *(uint32_t*)&memory[program_counter] = dest_addr;
+            program_counter += 4;
+            *(uint32_t*)&memory[program_counter] = src_addr;
+            program_counter += 4;
+            memory[program_counter++] = (uint8_t)reg_count;
+            break;
+        }
+        case OP_MEM_SET_MEM_REG_VAL: {
+            uint32_t dest_addr = parse_address(reg1_str);
+            RegisterIndex reg_value = register_from_string(reg2_str);
+            uint32_t count_val = parse_address(reg3_str); // Parse count as immediate value
+
+            if (reg_value == REG_INVALID) {
+                fprintf(stderr, "Error: Invalid register '%s' for value in MEMSET on line %d.\n", reg2_str, line_number);
+                fclose(asm_file);
+                fclose(rom_file);
+                return -1;
+            }
+
+            *(uint32_t*)&memory[program_counter] = dest_addr;
+            program_counter += 4;
+            memory[program_counter++] = (uint8_t)reg_value;
+            *(uint32_t*)&memory[program_counter] = count_val; // Write count value
+            program_counter += 4;
+            break;
+        }
+        case OP_MEM_FREE_MEM: { 
+            uint32_t address = parse_address(reg1_str);
+            *(uint32_t*)&memory[program_counter] = address;
+            program_counter += 4;
             break;
         }
 
