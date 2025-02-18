@@ -4,15 +4,13 @@
 
 ; --- Main Program ---
 start:
-    MOV F0, 0x04        ; BIOS Print String function
-    MOV F1, msg_neg_result
-    INT 0x01
+    MOV R0, msg_neg_result  ; Load address of "Negation Result: " string into R0
+    sys.print_string R0      ; Print the string "Negation Result: "
 
-    MOV R0, 4.5         ; Load 4.5 into R0
-    math.neg R0          ; Negate R0
+    MOV R0, 4.5             ; Load 4.5 into R0
+    math.neg R0              ; Negate R0
 
-    MOV F0, 0x0E        ; BIOS Print Number (Float) function
-    MOV F1, R0          ; Value to print (R0 after negation)
-    INT 0x01
+    sys.print_number_dec R0 ; Print the negated number (float) in R0
 
-    HLT
+    sys.newline             ; Print a newline character for better formatting
+    HLT                     ; Halt CPU
