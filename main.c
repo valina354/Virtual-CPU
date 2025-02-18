@@ -30,6 +30,14 @@
 #define TARGET_INSTRUCTIONS_PER_SECOND 100000
 #define DELAY_DURATION_US (1000000 / TARGET_INSTRUCTIONS_PER_SECOND)
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+#ifndef M_E
+#define M_E 2.71828182845904523536
+#endif
+
 
 // Opcodes
 typedef enum {
@@ -67,7 +75,6 @@ typedef enum {
     OP_MOVSX_REG_REG, // Move with Sign-Extend Register to Register
     OP_MOVSX_REG_MEM, // Move with Sign-Extend Memory to Register
     OP_LEA_REG_MEM,   // Load Effective Address
-    OP_INT,          // Software Interrupt
     OP_JMP,          // Jump Unconditional
     OP_JMP_NZ,       // Jump if Not Zero
     OP_JMP_Z,        // Jump if Zero
@@ -125,19 +132,43 @@ typedef enum {
     OP_MATH_MIN,
     OP_MATH_MAX,
     OP_MATH_NEG,
+    OP_MATH_PI,
+    OP_MATH_E,
 
     // String Standard Library Opcodes
-    OP_STR_LEN_REG_MEM,     // STRLEN reg, mem_addr (reg = strlen(mem_addr))
-    OP_STR_CPY_MEM_MEM,     // STRCPY dest_mem_addr, src_mem_addr (strcpy(dest, src))
-    OP_STR_CAT_MEM_MEM,     // STRCAT dest_mem_addr, src_mem_addr (strcat(dest, src))
-    OP_STR_CMP_REG_MEM_MEM, // STRCMP reg, mem_addr1, mem_addr2 (reg = strcmp(str1, str2))
-    OP_STR_NCPY_MEM_MEM_REG, // STRNCPY dest_mem_addr, src_mem_addr, num (strncpy(dest, src, num))
-    OP_STR_NCAT_MEM_MEM_REG, // STRNCAT dest_mem_addr, src_mem_addr, num (strncat(dest, src, num))
+    OP_STR_LEN_REG_MEM,
+    OP_STR_CPY_MEM_MEM,
+    OP_STR_CAT_MEM_MEM,
+    OP_STR_CMP_REG_MEM_MEM,
+    OP_STR_NCPY_MEM_MEM_REG,
+    OP_STR_NCAT_MEM_MEM_REG,
+    OP_STR_TOUPPER_MEM,
+    OP_STR_TOLOWER_MEM,
+    OP_STR_CHR_REG_MEM_VAL,
+    OP_STR_STR_REG_MEM_MEM,
 
     // Memory Standard Library Opcodes
     OP_MEM_CPY_MEM_MEM_REG,
     OP_MEM_SET_MEM_REG_VAL,
     OP_MEM_FREE_MEM,
+
+    // System Standard Library Opcodes (Replaces BIOS Interrupts)
+    OP_SYS_PRINT_CHAR,
+    OP_SYS_CLEAR_SCREEN,
+    OP_SYS_PRINT_STRING,
+    OP_SYS_PRINT_NEWLINE,
+    OP_SYS_SET_CURSOR_POS,
+    OP_SYS_GET_CURSOR_POS,
+    OP_SYS_SET_TEXT_COLOR,
+    OP_SYS_RESET_TEXT_COLOR,
+    OP_SYS_PRINT_NUMBER_DEC,
+    OP_SYS_PRINT_NUMBER_HEX,
+    OP_SYS_NUMBER_TO_STRING,
+    OP_SYS_READ_CHAR,
+    OP_SYS_READ_STRING,
+    OP_SYS_GET_KEY_PRESS,
+    OP_SYS_GET_CPU_VER,
+    OP_SYS_WAIT,
 
     OP_INVALID       // Invalid Opcode
 } Opcode;
@@ -149,7 +180,7 @@ typedef enum {
     REG_R16, REG_R17, REG_R18, REG_R19, REG_R20, REG_R21, REG_R22, REG_R23,
     REG_R24, REG_R25, REG_R26, REG_R27, REG_R28, REG_R29, REG_R30, REG_R31, // General purpose registers
     REG_SP,                                                                  // Stack Pointer Register
-    REG_F0, REG_F1, REG_F2, REG_F3,                                          // Function Registers (for BIOS calls)
+    REG_F0, REG_F1, REG_F2, REG_F3,                                          // Function Registers (for BIOS calls) - now general purpose
     REG_ZF, // Zero Flag
     REG_SF, // Sign Flag
     REG_CF, // Carry Flag
@@ -161,44 +192,6 @@ typedef enum {
 #define NUM_FLAG_REGISTERS (REG_FLAG_COUNT - REG_F3 - 1 - 2) // Calculate number of flag registers - adjusted, now including CF, OF
 #define NUM_TOTAL_REGISTERS (NUM_GENERAL_REGISTERS + NUM_F_REGISTERS + NUM_FLAG_REGISTERS) // Update total registers
 
-// BIOS Video Functions
-typedef enum {
-    BIOS_PRINT_CHAR = 0x01,
-    BIOS_CLEAR_SCREEN = 0x02,
-    BIOS_PRINT_STRING = 0x04,
-    BIOS_PRINT_NEWLINE = 0x05,
-    BIOS_SET_CURSOR_POS = 0x0A,
-    BIOS_GET_CURSOR_POS = 0x0B,
-    BIOS_SET_TEXT_COLOR = 0x0C,
-    BIOS_RESET_TEXT_COLOR = 0x0D,
-    BIOS_PRINT_NUMBER_DEC = 0x0E,
-    BIOS_PRINT_NUMBER_HEX = 0x0F,
-    BIOS_NUMBER_TO_STRING = 0x10,
-    BIOS_INVALID_VIDEO_FUNCTION = 0xFF
-} BIOSVideoFunction;
-
-// BIOS IO Functions
-typedef enum {
-    BIOS_READ_CHAR = 0x01,
-    BIOS_READ_STRING = 0x02,
-    BIOS_GET_KEY_PRESS = 0x03,
-    BIOS_INVALID_IO_FUNCTION = 0xFF
-} BIOSIOFunction;
-
-// BIOS System Functions
-typedef enum {
-    BIOS_GET_CPU_VER = 0x01,
-    BIOS_WAIT = 0x03,
-    BIOS_INVALID_SYSTEM_FUNCTION = 0xFF
-} BIOSSystemFunction;
-
-// BIOS Interrupts
-typedef enum {
-    BIOS_INT_VIDEO = 0x01,
-    BIOS_INT_IO = 0x02,
-    BIOS_INT_SYSTEM = 0x03,
-    BIOS_INVALID_INT = 0xFF
-} BIOSInterrupt;
 
 // Macro Definition Structure
 typedef struct {
@@ -266,8 +259,10 @@ void disable_raw_mode() {
 }
 #endif
 
-// BIOS Function: Read a Character from Input
-char bios_read_char() {
+// System Library Functions (replacing BIOS)
+
+// SYS Function: Read a Character from Input
+char sys_read_char() {
 #ifdef _WIN32
     return _getch();
 #else
@@ -278,8 +273,8 @@ char bios_read_char() {
 #endif
 }
 
-// BIOS Function: Get Key Press without Blocking (returns 0 if no key pressed)
-char bios_get_key_press() {
+// SYS Function: Get Key Press without Blocking (returns 0 if no key pressed)
+char sys_get_key_press() {
 #ifdef _WIN32
     if (_kbhit()) {
         return _getch();
@@ -308,20 +303,20 @@ char bios_get_key_press() {
 #endif
 }
 
-// BIOS Function: Print a Character to Console
-void bios_print_char(char character) {
+// SYS Function: Print a Character to Console
+void sys_print_char(char character) {
     printf("%c", character);
 }
 
-// BIOS Function: Print a Newline Character
-void bios_print_newline() {
-    bios_print_char('\n');
+// SYS Function: Print a Newline Character
+void sys_print_newline() {
+    sys_print_char('\n');
     cursor_y++;
     cursor_x = 0;
 }
 
-// BIOS Function: Read a String from Input
-void bios_read_string(uint32_t address, uint32_t max_len) {
+// SYS Function: Read a String from Input
+void sys_read_string(uint32_t address, uint32_t max_len) {
     if (address >= MEMORY_SIZE) {
         printf("Error: String address out of memory bounds in READ_STRING.\n");
         return;
@@ -330,10 +325,10 @@ void bios_read_string(uint32_t address, uint32_t max_len) {
     uint32_t i = 0;
     char c;
     while (i < max_len - 1) {
-        c = bios_read_char();
+        c = sys_read_char();
         if (c == '\r' || c == '\n') {
             str_ptr[i] = '\0';
-            bios_print_newline();
+            sys_print_newline();
             break;
         }
         else if (c == 127) { // Backspace
@@ -345,7 +340,7 @@ void bios_read_string(uint32_t address, uint32_t max_len) {
         }
         else if (c >= 32 && c <= 126) { // Printable characters
             str_ptr[i++] = c;
-            bios_print_char(c);
+            sys_print_char(c);
         }
         else if (c == 27) { // Escape character - ignore
             continue;
@@ -356,18 +351,18 @@ void bios_read_string(uint32_t address, uint32_t max_len) {
     }
 }
 
-// BIOS Function: Print Unsigned Decimal Number
-void bios_print_number_dec(double number) {
+// SYS Function: Print Unsigned Decimal Number
+void sys_print_number_dec(double number) {
     printf("%f", number);
 }
 
-// BIOS Function: Print Hexadecimal Number
-void bios_print_number_hex(uint32_t number) {
+// SYS Function: Print Hexadecimal Number
+void sys_print_number_hex(uint32_t number) {
     printf("0x%X", number);
 }
 
-// BIOS Function: Convert Number to String in Memory
-void bios_number_to_string(uint32_t number, uint32_t address, uint32_t buffer_size) {
+// SYS Function: Convert Number to String in Memory
+void sys_number_to_string(uint32_t number, uint32_t address, uint32_t buffer_size) {
     if (address >= MEMORY_SIZE || address + buffer_size > MEMORY_SIZE) {
         printf("Error: Buffer address out of memory bounds in NUMBER_TO_STRING.\n");
         return;
@@ -376,8 +371,8 @@ void bios_number_to_string(uint32_t number, uint32_t address, uint32_t buffer_si
     snprintf(str_ptr, buffer_size, "%u", number);
 }
 
-// BIOS Function: Set Cursor Position
-void bios_set_cursor_pos(uint32_t x, uint32_t y) {
+// SYS Function: Set Cursor Position
+void sys_set_cursor_pos(uint32_t x, uint32_t y) {
     cursor_x = x;
     cursor_y = y;
 #ifdef _WIN32
@@ -389,16 +384,16 @@ void bios_set_cursor_pos(uint32_t x, uint32_t y) {
 #endif
 }
 
-// BIOS Function: Get Cursor Position (returns in F1 and F2 registers)
-void bios_get_cursor_pos(uint32_t* x, uint32_t* y) {
+// SYS Function: Get Cursor Position (returns in F1 and F2 registers)
+void sys_get_cursor_pos(uint32_t* x, uint32_t* y) {
     *x = cursor_x;
     *y = cursor_y;
     registers[REG_F1] = cursor_x;
     registers[REG_F2] = cursor_y;
 }
 
-// BIOS Function: Set Text Color (64 colors - extended ANSI)
-void bios_set_text_color(uint32_t color_code) {
+// SYS Function: Set Text Color (64 colors - extended ANSI)
+void sys_set_text_color(uint32_t color_code) {
     text_color = color_code;
 #ifdef _WIN32
     // Windows basic 16 colors - map 64 to 16 (basic mapping for now)
@@ -415,8 +410,8 @@ void bios_set_text_color(uint32_t color_code) {
 }
 
 
-// BIOS Function: Reset Text Color to Default
-void bios_reset_text_color() {
+// SYS Function: Reset Text Color to Default
+void sys_reset_text_color() {
 #ifdef _WIN32
     SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), 7); // Default color on Windows
 #else
@@ -425,15 +420,15 @@ void bios_reset_text_color() {
     text_color = 7; // Reset internal color tracking
 }
 
-// BIOS Function: Print Null-Terminated String from Memory
-void bios_print_string(uint32_t address) {
+// SYS Function: Print Null-Terminated String from Memory
+void sys_print_string(uint32_t address) {
     if (address >= MEMORY_SIZE) {
         printf("Error: String address out of memory bounds.\n");
         return;
     }
     char* str = (char*)&memory[address];
     while (*str != '\0') {
-        bios_print_char(*str);
+        sys_print_char(*str);
         str++;
         if ((uint32_t)(str - (char*)memory) >= MEMORY_SIZE) {
             printf("Error: String exceeds memory bounds.\n");
@@ -442,8 +437,8 @@ void bios_print_string(uint32_t address) {
     }
 }
 
-// BIOS Function: Clear Screen
-void bios_clear_screen() {
+// SYS Function: Clear Screen
+void sys_clear_screen() {
 #ifdef _WIN32
     system("cls");
 #else
@@ -454,8 +449,8 @@ void bios_clear_screen() {
     cursor_y = 0;
 }
 
-// BIOS Function: Wait for Milliseconds
-void bios_wait(uint32_t milliseconds) {
+// SYS Function: Wait for Milliseconds
+void sys_wait(uint32_t milliseconds) {
 #ifdef _WIN32
     Sleep(milliseconds);
 #else
@@ -463,92 +458,11 @@ void bios_wait(uint32_t milliseconds) {
 #endif
 }
 
-// BIOS Interrupt Handler
-void bios_interrupt(uint8_t interrupt_number) {
-    BIOSInterrupt bios_int = (BIOSInterrupt)interrupt_number;
-
-    switch (bios_int) {
-    case BIOS_INT_VIDEO: {
-        BIOSVideoFunction function = (BIOSVideoFunction)(uint32_t)registers[REG_F0];
-        switch (function) {
-        case BIOS_PRINT_CHAR:
-            bios_print_char((char)(uint32_t)registers[REG_F1]);
-            cursor_x++;
-            break;
-        case BIOS_CLEAR_SCREEN:
-            bios_clear_screen();
-            break;
-        case BIOS_PRINT_STRING:
-            bios_print_string((uint32_t)registers[REG_F1]);
-            break;
-        case BIOS_PRINT_NEWLINE:
-            bios_print_newline();
-            break;
-        case BIOS_SET_CURSOR_POS:
-            bios_set_cursor_pos((uint32_t)registers[REG_F1], (uint32_t)registers[REG_F2]);
-            break;
-        case BIOS_GET_CURSOR_POS:
-            bios_get_cursor_pos(NULL, NULL);
-            break;
-        case BIOS_SET_TEXT_COLOR:
-            bios_set_text_color((uint32_t)registers[REG_F1]);
-            break;
-        case BIOS_RESET_TEXT_COLOR:
-            bios_reset_text_color();
-            break;
-        case BIOS_PRINT_NUMBER_DEC:
-            bios_print_number_dec(registers[REG_F1]);
-            break;
-        case BIOS_PRINT_NUMBER_HEX:
-            bios_print_number_hex((uint32_t)registers[REG_F1]);
-            break;
-        case BIOS_NUMBER_TO_STRING:
-            bios_number_to_string((uint32_t)registers[REG_F1], (uint32_t)registers[REG_F2], (uint32_t)registers[REG_F3]);
-            break;
-        default:
-            printf("BIOS Interrupt 0x%02X (Video) - Unknown function: 0x%02X\n", bios_int, function);
-            break;
-        }
-        break;
-    }
-    case BIOS_INT_IO: {
-        BIOSIOFunction function = (BIOSIOFunction)(uint32_t)registers[REG_F0];
-        switch (function) {
-        case BIOS_READ_CHAR:
-            registers[REG_F1] = (double)bios_read_char();
-            break;
-        case BIOS_READ_STRING:
-            bios_read_string((uint32_t)registers[REG_F1], (uint32_t)registers[REG_F2]);
-            break;
-        case BIOS_GET_KEY_PRESS:
-            registers[REG_F1] = (double)bios_get_key_press();
-            break;
-        default:
-            printf("BIOS Interrupt 0x%02X (IO) - Unknown function: 0x%02X\n", bios_int, function);
-            break;
-        }
-        break;
-    }
-    case BIOS_INT_SYSTEM: {
-        BIOSSystemFunction function = (BIOSSystemFunction)(uint32_t)registers[REG_F0];
-        switch (function) {
-        case BIOS_GET_CPU_VER:
-            registers[REG_F1] = CPU_VER;
-            break;
-        case BIOS_WAIT:
-            bios_wait((uint32_t)registers[REG_F1]);
-            break;
-        default:
-            printf("BIOS Interrupt 0x%02X (System) - Unknown function: 0x%02X\n", bios_int, function);
-            break;
-        }
-        break;
-    }
-    default:
-        printf("Unknown BIOS Interrupt: 0x%02X\n", interrupt_number);
-        break;
-    }
+// SYS Function: Get CPU Version
+uint32_t sys_get_cpu_ver() {
+    return CPU_VER;
 }
+
 
 // Instruction Decoding: Decode Opcode from Memory
 Opcode decode_opcode() {
@@ -1074,11 +988,6 @@ void execute_instruction(Opcode opcode) {
         if (reg_dest != REG_INVALID) {
             registers[reg_dest] = (double)address;
         }
-        break;
-
-    case OP_INT:
-        value_uint32 = decode_value_uint32();
-        bios_interrupt((uint8_t)value_uint32);
         break;
     case OP_JMP:
         address = decode_address();
@@ -1687,7 +1596,29 @@ void execute_instruction(Opcode opcode) {
         }
         break;
     }
-                    // String Standard Library Implementation
+    case OP_MATH_PI: {
+        reg1 = decode_register();
+        if (reg1 != REG_INVALID) {
+            registers[reg1] = M_PI;
+            set_zero_flag_float(registers[reg1]);
+            set_sign_flag_float(registers[reg1]);
+            set_carry_flag(registers[reg1], 0, 0, opcode);
+            set_overflow_flag(registers[reg1], 0, 0, opcode);
+        }
+        break;
+    }
+    case OP_MATH_E: {
+        reg1 = decode_register();
+        if (reg1 != REG_INVALID) {
+            registers[reg1] = M_E;
+            set_zero_flag_float(registers[reg1]);
+            set_sign_flag_float(registers[reg1]);
+            set_carry_flag(registers[reg1], 0, 0, opcode);
+            set_overflow_flag(registers[reg1], 0, 0, opcode);
+        }
+        break;
+    }
+                  // String Standard Library Implementation
     case OP_STR_LEN_REG_MEM: {
         reg1 = decode_register();
         address = decode_address();
@@ -1811,6 +1742,129 @@ void execute_instruction(Opcode opcode) {
         }
         break;
     }
+    case OP_STR_TOUPPER_MEM: {
+        address = decode_address();
+        if (address < MEMORY_SIZE) {
+            char* str = (char*)&memory[address];
+            char* p = str;
+            while (*p) {
+                *p = toupper((unsigned char)*p);
+                p++;
+            }
+        }
+        else {
+            printf("Error: STRTOUPPER address out of memory bounds!\n");
+            running = false;
+        }
+        break;
+    }
+    case OP_STR_TOLOWER_MEM: {
+        address = decode_address();
+        if (address < MEMORY_SIZE) {
+            char* str = (char*)&memory[address];
+            char* p = str;
+            while (*p) {
+                *p = tolower((unsigned char)*p);
+                p++;
+            }
+        }
+        else {
+            printf("Error: STRTOLOWER address out of memory bounds!\n");
+            running = false;
+        }
+        break;
+    }
+    case OP_STR_CHR_REG_MEM_VAL: {
+        reg1 = decode_register();
+        address = decode_address();
+        uint32_t char_val = decode_value_uint32(); // Character value is decoded as uint32_t
+        if (reg1 != REG_INVALID && address < MEMORY_SIZE) {
+            char* str = (char*)&memory[address];
+            char char_to_find = (char)char_val; // Cast to char for comparison
+            char* result = strchr(str, char_to_find);
+            if (result) {
+                registers[reg1] = (double)(result - str); // Store index in register
+            }
+            else {
+                registers[reg1] = -1.0; // Not found, store -1
+            }
+            set_zero_flag_float(registers[reg1]); // Update flags based on result
+            set_sign_flag_float(registers[reg1]);
+        }
+        break;
+    }
+    case OP_STR_STR_REG_MEM_MEM: { // <--- ADD THIS CASE
+        reg1 = decode_register();
+        uint32_t haystack_addr = decode_address();
+        uint32_t needle_addr = decode_address();
+        if (reg1 != REG_INVALID && haystack_addr < MEMORY_SIZE && needle_addr < MEMORY_SIZE) {
+            char* haystack = (char*)&memory[haystack_addr];
+            char* needle = (char*)&memory[needle_addr];
+            char* result = strstr(haystack, needle);
+            if (result) {
+                registers[reg1] = (double)(result - haystack); // Store starting index
+            }
+            else {
+                registers[reg1] = -1.0; // Not found, store -1
+            }
+            set_zero_flag_float(registers[reg1]); // Update flags
+            set_sign_flag_float(registers[reg1]);
+        }
+        break;
+    }
+                               // System Library Opcodes Implementation
+    case OP_SYS_PRINT_CHAR:
+        sys_print_char((char)(uint32_t)registers[REG_R0]); // Assuming argument in R0
+        cursor_x++;
+        break;
+    case OP_SYS_CLEAR_SCREEN:
+        sys_clear_screen();
+        break;
+    case OP_SYS_PRINT_STRING:
+        sys_print_string((uint32_t)registers[REG_R0]); // Assuming address in R0
+        break;
+    case OP_SYS_PRINT_NEWLINE:
+        sys_print_newline();
+        break;
+    case OP_SYS_SET_CURSOR_POS:
+        sys_set_cursor_pos((uint32_t)registers[REG_R0], (uint32_t)registers[REG_R1]); // Assuming X in R0, Y in R1
+        break;
+    case OP_SYS_GET_CURSOR_POS:
+        sys_get_cursor_pos(NULL, NULL); // Results in F1, F2 - which are now general purpose, can use R1, R2 instead if needed.
+        registers[REG_R0] = registers[REG_F1]; // Return X in R0
+        registers[REG_R1] = registers[REG_F2]; // Return Y in R1
+        break;
+    case OP_SYS_SET_TEXT_COLOR:
+        sys_set_text_color((uint32_t)registers[REG_R0]); // Assuming color code in R0
+        break;
+    case OP_SYS_RESET_TEXT_COLOR:
+        sys_reset_text_color();
+        break;
+    case OP_SYS_PRINT_NUMBER_DEC:
+        sys_print_number_dec(registers[REG_R0]); // Assuming number in R0
+        break;
+    case OP_SYS_PRINT_NUMBER_HEX:
+        sys_print_number_hex((uint32_t)registers[REG_R0]); // Assuming number in R0
+        break;
+    case OP_SYS_NUMBER_TO_STRING:
+        sys_number_to_string((uint32_t)registers[REG_R0], (uint32_t)registers[REG_R1], (uint32_t)registers[REG_R2]); // Assuming num in R0, addr in R1, size in R2
+        break;
+    case OP_SYS_READ_CHAR:
+        registers[REG_R0] = (double)sys_read_char(); // Result in R0
+        break;
+    case OP_SYS_READ_STRING:
+        sys_read_string((uint32_t)registers[REG_R0], (uint32_t)registers[REG_R1]); // Assuming addr in R0, max_len in R1
+        break;
+    case OP_SYS_GET_KEY_PRESS:
+        registers[REG_R0] = (double)sys_get_key_press(); // Result in R0
+        break;
+    case OP_SYS_GET_CPU_VER:
+        registers[REG_R0] = sys_get_cpu_ver(); // Version in R0
+        break;
+    case OP_SYS_WAIT:
+        sys_wait((uint32_t)registers[REG_R0]); // Assuming milliseconds in R0
+        break;
+
 
     case OP_INVALID:
         printf("Invalid Opcode!\n");
@@ -1829,8 +1883,8 @@ void run_vm() {
     running = true;
     memset(registers, 0, sizeof(registers));
     registers[REG_SP] = MEMORY_SIZE - 8;
-    bios_reset_text_color();
-    bios_clear_screen();
+    sys_reset_text_color();
+    sys_clear_screen();
     srand(time(NULL));
 
     while (running) {
@@ -1846,7 +1900,7 @@ void run_vm() {
 
         if (!running) break;
     }
-    bios_reset_text_color();
+    sys_reset_text_color();
 }
 
 // Assembler Functions
@@ -1966,9 +2020,6 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, ch
         if (operand1 && operand2 && is_register_str(operand1)) {
             if (is_memory_address_str(operand2) || get_label_address(operand2) != -1) return OP_LEA_REG_MEM;
         }
-    }
-    if (strcmp(op_str, "INT") == 0) {
-        if (operand1) return OP_INT;
     }
     if (strcmp(op_str, "JMP") == 0) {
         if (operand1) return OP_JMP;
@@ -2135,6 +2186,12 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, ch
         else if (strcmp(math_func, "neg") == 0) {
             if (operand1 && is_register_str(operand1)) return OP_MATH_NEG;
         }
+        else if (strcmp(math_func, "pi") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_MATH_PI;
+        }
+        else if (strcmp(math_func, "e") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_MATH_E;
+        }
     }
 
     // String Standard Library Opcodes Parsing
@@ -2177,6 +2234,26 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, ch
                 is_register_str(operand3))
                 return OP_STR_NCAT_MEM_MEM_REG;
         }
+        else if (strcmp(str_func, "toupper") == 0) {
+            if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1))
+                return OP_STR_TOUPPER_MEM;
+        }
+        else if (strcmp(str_func, "tolower") == 0) {
+            if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1))
+                return OP_STR_TOLOWER_MEM;
+        }
+        else if (strcmp(str_func, "chr") == 0) {
+            if (operand1 && operand2 && operand3 && is_register_str(operand1) &&
+                (is_memory_address_str(operand2) || get_label_address(operand2) != -1) &&
+                !is_register_str(operand3) && !is_memory_address_str(operand3)) // char_val is immediate
+                return OP_STR_CHR_REG_MEM_VAL;
+        }
+        else if (strcmp(str_func, "str") == 0) {
+            if (operand1 && operand2 && operand3 && is_register_str(operand1) &&
+                (is_memory_address_str(operand2) || get_label_address(operand2) != -1) &&
+                (is_memory_address_str(operand3) || get_label_address(operand3) != -1))
+                return OP_STR_STR_REG_MEM_MEM;
+        }
     }
     else if (strncmp(op_str, "mem.", 4) == 0) {
         char* mem_func = op_str + 4;
@@ -2198,6 +2275,58 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, ch
             if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1)) {
                 return OP_MEM_FREE_MEM;
             }
+        }
+    }
+    // System Standard Library Opcodes Parsing
+    else if (strncmp(op_str, "sys.", 4) == 0) {
+        char* sys_func = op_str + 4;
+        if (strcmp(sys_func, "print_char") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_SYS_PRINT_CHAR;
+        }
+        else if (strcmp(sys_func, "clear_screen") == 0) {
+            return OP_SYS_CLEAR_SCREEN;
+        }
+        else if (strcmp(sys_func, "print_string") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_SYS_PRINT_STRING;
+        }
+        else if (strcmp(sys_func, "newline") == 0) {
+            return OP_SYS_PRINT_NEWLINE;
+        }
+        else if (strcmp(sys_func, "set_cursor_pos") == 0) {
+            if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_SYS_SET_CURSOR_POS;
+        }
+        else if (strcmp(sys_func, "get_cursor_pos") == 0) {
+            return OP_SYS_GET_CURSOR_POS;
+        }
+        else if (strcmp(sys_func, "set_text_color") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_SYS_SET_TEXT_COLOR;
+        }
+        else if (strcmp(sys_func, "reset_text_color") == 0) {
+            return OP_SYS_RESET_TEXT_COLOR;
+        }
+        else if (strcmp(sys_func, "print_number_dec") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_SYS_PRINT_NUMBER_DEC;
+        }
+        else if (strcmp(sys_func, "print_number_hex") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_SYS_PRINT_NUMBER_HEX;
+        }
+        else if (strcmp(sys_func, "number_to_string") == 0) {
+            if (operand1 && operand2 && operand3 && is_register_str(operand1) && is_register_str(operand2) && is_register_str(operand3)) return OP_SYS_NUMBER_TO_STRING;
+        }
+        else if (strcmp(sys_func, "read_char") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_SYS_READ_CHAR; // Though read_char doesn't take an arg, we expect a reg for consistency
+        }
+        else if (strcmp(sys_func, "read_string") == 0) {
+            if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_SYS_READ_STRING;
+        }
+        else if (strcmp(sys_func, "get_key_press") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_SYS_GET_KEY_PRESS; // Similar to read_char
+        }
+        else if (strcmp(sys_func, "cpu_ver") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_SYS_GET_CPU_VER;
+        }
+        else if (strcmp(sys_func, "wait") == 0) {
+            if (operand1) return OP_SYS_WAIT;
         }
     }
 
@@ -2774,13 +2903,14 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_MATH_CEIL:
         case OP_MATH_ROUND:
         case OP_MATH_NEG:
+        case OP_MATH_PI:
+        case OP_MATH_E:
         case OP_SHL_REG_VAL:
         case OP_SHR_REG_VAL:
         case OP_SAR_REG_VAL:
         case OP_ROL_REG_VAL:
         case OP_ROR_REG_VAL:
             program_counter += 2; break; // Opcode (1) + Reg (1) or Value (1)
-        case OP_INT: program_counter += 4; break; // Opcode (1) + Value (4)
         case OP_JMP:
         case OP_JMP_NZ:
         case OP_JMP_Z:
@@ -2812,6 +2942,30 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
             program_counter += 10; break; // Opcode (1) + Address (4) + Reg (1) + Value (4) - assuming value is uint32 immediate
         case OP_MEM_FREE_MEM:
             program_counter += 5; break; // Opcode (1) + Address (4)
+        case OP_STR_TOUPPER_MEM:
+        case OP_STR_TOLOWER_MEM:
+            program_counter += 5; break; // Opcode (1) + Address (4)
+        case OP_STR_CHR_REG_MEM_VAL:
+            program_counter += 10; break; // Opcode (1) + Reg (1) + Address (4) + Value (4)
+        case OP_STR_STR_REG_MEM_MEM:
+            program_counter += 9; break; // Opcode (1) + Reg (1) + 2 Addresses (8)
+            // System Library Opcodes have no operands after opcode byte itself in Pass 1
+        case OP_SYS_PRINT_CHAR:
+        case OP_SYS_CLEAR_SCREEN:
+        case OP_SYS_PRINT_STRING:
+        case OP_SYS_PRINT_NEWLINE:
+        case OP_SYS_SET_CURSOR_POS:
+        case OP_SYS_GET_CURSOR_POS:
+        case OP_SYS_SET_TEXT_COLOR:
+        case OP_SYS_RESET_TEXT_COLOR:
+        case OP_SYS_PRINT_NUMBER_DEC:
+        case OP_SYS_PRINT_NUMBER_HEX:
+        case OP_SYS_NUMBER_TO_STRING:
+        case OP_SYS_READ_CHAR:
+        case OP_SYS_READ_STRING:
+        case OP_SYS_GET_KEY_PRESS:
+        case OP_SYS_GET_CPU_VER:
+        case OP_SYS_WAIT:
         case OP_NOP:
         case OP_HLT:
         case OP_RET:
@@ -3078,6 +3232,8 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_MATH_CEIL:
         case OP_MATH_ROUND:
         case OP_MATH_NEG:
+        case OP_MATH_PI:
+        case OP_MATH_E:
         case OP_SHL_REG_VAL:
         case OP_SHR_REG_VAL:
         case OP_SAR_REG_VAL:
@@ -3092,12 +3248,6 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
                 return -1;
             }
             memory[program_counter++] = (uint8_t)reg;
-            break;
-        }
-        case OP_INT: {
-            uint32_t value = parse_address(reg1_str); // Parse interrupt value as integer address
-            *(uint32_t*)&memory[program_counter] = value;
-            program_counter += 4;
             break;
         }
         case OP_JMP:
@@ -3196,13 +3346,73 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
             program_counter += 4;
             break;
         }
-        case OP_MEM_FREE_MEM: { 
+        case OP_MEM_FREE_MEM: {
             uint32_t address = parse_address(reg1_str);
             *(uint32_t*)&memory[program_counter] = address;
             program_counter += 4;
             break;
         }
-
+        case OP_STR_TOUPPER_MEM:
+        case OP_STR_TOLOWER_MEM:
+        {
+            uint32_t address = parse_address(reg1_str);
+            *(uint32_t*)&memory[program_counter] = address;
+            program_counter += 4;
+            break;
+        }
+        case OP_STR_CHR_REG_MEM_VAL:
+        {
+            RegisterIndex reg = register_from_string(reg1_str);
+            uint32_t address = parse_address(reg2_str);
+            uint32_t char_val = parse_address(reg3_str); // Parse char_val as address to handle immediate values
+            if (reg == REG_INVALID) {
+                fprintf(stderr, "Error: Invalid register '%s' in STRCHR on line %d.\n", reg1_str, line_number);
+                fclose(asm_file);
+                fclose(rom_file);
+                return -1;
+            }
+            memory[program_counter++] = (uint8_t)reg;
+            *(uint32_t*)&memory[program_counter] = address;
+            program_counter += 4;
+            *(uint32_t*)&memory[program_counter] = char_val; // Write char value
+            program_counter += 4;
+            break;
+        }
+        case OP_STR_STR_REG_MEM_MEM:
+        {
+            RegisterIndex reg = register_from_string(reg1_str);
+            uint32_t haystack_addr = parse_address(reg2_str);
+            uint32_t needle_addr = parse_address(reg3_str);
+            if (reg == REG_INVALID) {
+                fprintf(stderr, "Error: Invalid register '%s' in STRSTR on line %d.\n", reg1_str, line_number);
+                fclose(asm_file);
+                fclose(rom_file);
+                return -1;
+            }
+            memory[program_counter++] = (uint8_t)reg;
+            *(uint32_t*)&memory[program_counter] = haystack_addr;
+            program_counter += 4;
+            *(uint32_t*)&memory[program_counter] = needle_addr;
+            program_counter += 4;
+            break;
+        }
+        // System Library Opcodes - operands are registers, already available in registers array
+        case OP_SYS_PRINT_CHAR: // Argument in R0
+        case OP_SYS_CLEAR_SCREEN:
+        case OP_SYS_PRINT_STRING: // Address in R0
+        case OP_SYS_PRINT_NEWLINE:
+        case OP_SYS_SET_CURSOR_POS: // X in R0, Y in R1
+        case OP_SYS_GET_CURSOR_POS: // Results in R0, R1 (X, Y)
+        case OP_SYS_SET_TEXT_COLOR: // Color code in R0
+        case OP_SYS_RESET_TEXT_COLOR:
+        case OP_SYS_PRINT_NUMBER_DEC: // Number in R0
+        case OP_SYS_PRINT_NUMBER_HEX: // Number in R0
+        case OP_SYS_NUMBER_TO_STRING: // Num in R0, addr in R1, size in R2
+        case OP_SYS_READ_CHAR: // Result in R0
+        case OP_SYS_READ_STRING: // Addr in R0, max_len in R1
+        case OP_SYS_GET_KEY_PRESS: // Result in R0
+        case OP_SYS_GET_CPU_VER: // Version in R0
+        case OP_SYS_WAIT: // Milliseconds in R0
         case OP_RET:
         case OP_NOP:
         case OP_HLT:
