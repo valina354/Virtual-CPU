@@ -132,8 +132,6 @@ typedef enum {
     OP_MATH_MIN,
     OP_MATH_MAX,
     OP_MATH_NEG,
-    OP_MATH_PI,
-    OP_MATH_E,
 
     // String Standard Library Opcodes
     OP_STR_LEN_REG_MEM,
@@ -1596,28 +1594,6 @@ void execute_instruction(Opcode opcode) {
         }
         break;
     }
-    case OP_MATH_PI: {
-        reg1 = decode_register();
-        if (reg1 != REG_INVALID) {
-            registers[reg1] = M_PI;
-            set_zero_flag_float(registers[reg1]);
-            set_sign_flag_float(registers[reg1]);
-            set_carry_flag(registers[reg1], 0, 0, opcode);
-            set_overflow_flag(registers[reg1], 0, 0, opcode);
-        }
-        break;
-    }
-    case OP_MATH_E: {
-        reg1 = decode_register();
-        if (reg1 != REG_INVALID) {
-            registers[reg1] = M_E;
-            set_zero_flag_float(registers[reg1]);
-            set_sign_flag_float(registers[reg1]);
-            set_carry_flag(registers[reg1], 0, 0, opcode);
-            set_overflow_flag(registers[reg1], 0, 0, opcode);
-        }
-        break;
-    }
                   // String Standard Library Implementation
     case OP_STR_LEN_REG_MEM: {
         reg1 = decode_register();
@@ -2186,12 +2162,6 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, ch
         else if (strcmp(math_func, "neg") == 0) {
             if (operand1 && is_register_str(operand1)) return OP_MATH_NEG;
         }
-        else if (strcmp(math_func, "pi") == 0) {
-            if (operand1 && is_register_str(operand1)) return OP_MATH_PI;
-        }
-        else if (strcmp(math_func, "e") == 0) {
-            if (operand1 && is_register_str(operand1)) return OP_MATH_E;
-        }
     }
 
     // String Standard Library Opcodes Parsing
@@ -2287,7 +2257,7 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, ch
             return OP_SYS_CLEAR_SCREEN;
         }
         else if (strcmp(sys_func, "print_string") == 0) {
-            if (operand1 && is_register_str(operand1)) return OP_SYS_PRINT_STRING;
+            if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1 || is_register_str(operand1))) return OP_SYS_PRINT_STRING;
         }
         else if (strcmp(sys_func, "newline") == 0) {
             return OP_SYS_PRINT_NEWLINE;
@@ -2388,6 +2358,12 @@ uint32_t get_label_address(const char* label_name) {
 
 // Parse value string to double (supports hex, decimal, float, char literals, macros, labels)
 double parse_value_double(const char* value_str) {
+    if (strcmp(value_str, "M_PI") == 0) {
+        return M_PI;
+    }
+    if (strcmp(value_str, "M_E") == 0) {
+        return M_E;
+    }
     const char* macro_value_str = get_macro_value(value_str);
     if (macro_value_str != NULL) {
         value_str = macro_value_str;
@@ -2903,8 +2879,6 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_MATH_CEIL:
         case OP_MATH_ROUND:
         case OP_MATH_NEG:
-        case OP_MATH_PI:
-        case OP_MATH_E:
         case OP_SHL_REG_VAL:
         case OP_SHR_REG_VAL:
         case OP_SAR_REG_VAL:
@@ -3232,8 +3206,6 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_MATH_CEIL:
         case OP_MATH_ROUND:
         case OP_MATH_NEG:
-        case OP_MATH_PI:
-        case OP_MATH_E:
         case OP_SHL_REG_VAL:
         case OP_SHR_REG_VAL:
         case OP_SAR_REG_VAL:
