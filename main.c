@@ -21,10 +21,11 @@
 #define MEMORY_SIZE (16384 * 1024) // 16MB Memory
 #define NUM_GENERAL_REGISTERS 32
 #define NUM_F_REGISTERS 4
-#define CPU_VER 4 // CPU Version 3 (Buffer & String Lib Support)
+#define CPU_VER 3
 #define MAX_PREPROCESSOR_DEPTH 10 // Maximum depth for nested preprocessor directives
 
 // CPU Speed Simulation
+#define CLOCK_SPEED_MHZ 4.77
 #define INSTRUCTIONS_PER_SECOND (CLOCK_SPEED_MHZ * 1000000)
 #define TARGET_INSTRUCTIONS_PER_SECOND 100000
 #define DELAY_DURATION_US (1000000 / TARGET_INSTRUCTIONS_PER_SECOND)
