@@ -178,7 +178,6 @@ typedef enum {
     REG_R16, REG_R17, REG_R18, REG_R19, REG_R20, REG_R21, REG_R22, REG_R23,
     REG_R24, REG_R25, REG_R26, REG_R27, REG_R28, REG_R29, REG_R30, REG_R31, // General purpose registers
     REG_SP,                                                                  // Stack Pointer Register
-    REG_F0, REG_F1, REG_F2, REG_F3,                                          // Function Registers (for BIOS calls) - now general purpose
     REG_ZF, // Zero Flag
     REG_SF, // Sign Flag
     REG_CF, // Carry Flag
@@ -187,8 +186,8 @@ typedef enum {
     REG_INVALID
 } RegisterIndex;
 
-#define NUM_FLAG_REGISTERS (REG_FLAG_COUNT - REG_F3 - 1 - 2) // Calculate number of flag registers - adjusted, now including CF, OF
-#define NUM_TOTAL_REGISTERS (NUM_GENERAL_REGISTERS + NUM_F_REGISTERS + NUM_FLAG_REGISTERS) // Update total registers
+#define NUM_FLAG_REGISTERS 4
+#define NUM_TOTAL_REGISTERS (NUM_GENERAL_REGISTERS + NUM_FLAG_REGISTERS) // Update total registers
 
 
 // Macro Definition Structure
@@ -382,12 +381,10 @@ void sys_set_cursor_pos(uint32_t x, uint32_t y) {
 #endif
 }
 
-// SYS Function: Get Cursor Position (returns in F1 and F2 registers)
+// SYS Function: Get Cursor Position
 void sys_get_cursor_pos(uint32_t* x, uint32_t* y) {
     *x = cursor_x;
     *y = cursor_y;
-    registers[REG_F1] = cursor_x;
-    registers[REG_F2] = cursor_y;
 }
 
 // SYS Function: Set Text Color (64 colors - extended ANSI)
@@ -1790,55 +1787,101 @@ void execute_instruction(Opcode opcode) {
     }
                                // System Library Opcodes Implementation
     case OP_SYS_PRINT_CHAR:
-        sys_print_char((char)(uint32_t)registers[REG_R0]); // Assuming argument in R0
-        cursor_x++;
+        reg1 = decode_register(); // Decode register for character
+        if (reg1 != REG_INVALID) {
+            sys_print_char((char)(uint32_t)registers[reg1]); // Use specified register
+            cursor_x++;
+        }
         break;
     case OP_SYS_CLEAR_SCREEN:
         sys_clear_screen();
         break;
     case OP_SYS_PRINT_STRING:
-        sys_print_string((uint32_t)registers[REG_R0]); // Assuming address in R0
+        reg1 = decode_register(); // Decode register for address
+        if (reg1 != REG_INVALID) {
+            sys_print_string((uint32_t)registers[reg1]); // Use specified register
+        }
         break;
     case OP_SYS_PRINT_NEWLINE:
         sys_print_newline();
         break;
     case OP_SYS_SET_CURSOR_POS:
-        sys_set_cursor_pos((uint32_t)registers[REG_R0], (uint32_t)registers[REG_R1]); // Assuming X in R0, Y in R1
+        reg1 = decode_register(); // Decode register for X
+        reg2 = decode_register(); // Decode register for Y
+        if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
+            sys_set_cursor_pos((uint32_t)registers[reg1], (uint32_t)registers[reg2]); // Use specified registers
+        }
         break;
-    case OP_SYS_GET_CURSOR_POS:
-        sys_get_cursor_pos(NULL, NULL); // Results in F1, F2 - which are now general purpose, can use R1, R2 instead if needed.
-        registers[REG_R0] = registers[REG_F1]; // Return X in R0
-        registers[REG_R1] = registers[REG_F2]; // Return Y in R1
+    case OP_SYS_GET_CURSOR_POS: {
+        reg1 = decode_register(); // Decode register for X storage
+        reg2 = decode_register(); // Decode register for Y storage
+        uint32_t x_pos, y_pos;
+        sys_get_cursor_pos(&x_pos, &y_pos); // Get cursor position directly
+        if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
+            registers[reg1] = (double)x_pos; // Store X in specified register
+            registers[reg2] = (double)y_pos; // Store Y in specified register
+        }
         break;
+    }
     case OP_SYS_SET_TEXT_COLOR:
-        sys_set_text_color((uint32_t)registers[REG_R0]); // Assuming color code in R0
+        reg1 = decode_register(); // Decode register for color code
+        if (reg1 != REG_INVALID) {
+            sys_set_text_color((uint32_t)registers[reg1]); // Use specified register
+        }
         break;
     case OP_SYS_RESET_TEXT_COLOR:
         sys_reset_text_color();
         break;
     case OP_SYS_PRINT_NUMBER_DEC:
-        sys_print_number_dec(registers[REG_R0]); // Assuming number in R0
+        reg1 = decode_register(); // Decode register for number
+        if (reg1 != REG_INVALID) {
+            sys_print_number_dec(registers[reg1]); // Use specified register
+        }
         break;
     case OP_SYS_PRINT_NUMBER_HEX:
-        sys_print_number_hex((uint32_t)registers[REG_R0]); // Assuming number in R0
+        reg1 = decode_register(); // Decode register for number
+        if (reg1 != REG_INVALID) {
+            sys_print_number_hex((uint32_t)registers[reg1]); // Use specified register
+        }
         break;
     case OP_SYS_NUMBER_TO_STRING:
-        sys_number_to_string((uint32_t)registers[REG_R0], (uint32_t)registers[REG_R1], (uint32_t)registers[REG_R2]); // Assuming num in R0, addr in R1, size in R2
+        reg1 = decode_register(); // Decode register for number
+        reg2 = decode_register(); // Decode register for address
+        reg3 = decode_register(); // Decode register for buffer size
+        if (reg1 != REG_INVALID && reg2 != REG_INVALID && reg3 != REG_INVALID) {
+            sys_number_to_string((uint32_t)registers[reg1], (uint32_t)registers[reg2], (uint32_t)registers[reg3]); // Use specified registers
+        }
         break;
     case OP_SYS_READ_CHAR:
-        registers[REG_R0] = (double)sys_read_char(); // Result in R0
+        reg1 = decode_register(); // Decode register for result
+        if (reg1 != REG_INVALID) {
+            registers[reg1] = (double)sys_read_char(); // Result in specified register
+        }
         break;
     case OP_SYS_READ_STRING:
-        sys_read_string((uint32_t)registers[REG_R0], (uint32_t)registers[REG_R1]); // Assuming addr in R0, max_len in R1
+        reg1 = decode_register(); // Decode register for address
+        reg2 = decode_register(); // Decode register for max_len
+        if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
+            sys_read_string((uint32_t)registers[reg1], (uint32_t)registers[reg2]); // Use specified registers
+        }
         break;
     case OP_SYS_GET_KEY_PRESS:
-        registers[REG_R0] = (double)sys_get_key_press(); // Result in R0
+        reg1 = decode_register(); // Decode register for result
+        if (reg1 != REG_INVALID) {
+            registers[reg1] = (double)sys_get_key_press(); // Result in specified register
+        }
         break;
     case OP_SYS_GET_CPU_VER:
-        registers[REG_R0] = sys_get_cpu_ver(); // Version in R0
+        reg1 = decode_register(); // Decode register for version
+        if (reg1 != REG_INVALID) {
+            registers[reg1] = sys_get_cpu_ver(); // Version in specified register
+        }
         break;
     case OP_SYS_WAIT:
-        sys_wait((uint32_t)registers[REG_R0]); // Assuming milliseconds in R0
+        reg1 = decode_register(); // Decode register for milliseconds
+        if (reg1 != REG_INVALID) {
+            sys_wait((uint32_t)registers[reg1]); // Use specified register
+        }
         break;
 
 
@@ -2315,12 +2358,6 @@ RegisterIndex register_from_string(const char* reg_str) {
         int reg_num = atoi(reg_str + 1);
         if (reg_num >= 0 && reg_num < NUM_GENERAL_REGISTERS) {
             return (RegisterIndex)reg_num;
-        }
-    }
-    else if (strlen(reg_str) >= 2 && reg_str[0] == 'F') {
-        int reg_num = atoi(reg_str + 1);
-        if (reg_num >= 0 && reg_num < NUM_F_REGISTERS) {
-            return (RegisterIndex)(REG_F0 + reg_num);
         }
     }
     return REG_INVALID;
@@ -2865,6 +2902,15 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_RND_REG:
         case OP_PUSH_REG:
         case OP_POP_REG:
+        case OP_SYS_PRINT_CHAR:       
+        case OP_SYS_PRINT_STRING:     
+        case OP_SYS_SET_TEXT_COLOR:     
+        case OP_SYS_PRINT_NUMBER_DEC:  
+        case OP_SYS_PRINT_NUMBER_HEX:    
+        case OP_SYS_READ_CHAR:          
+        case OP_SYS_GET_KEY_PRESS:      
+        case OP_SYS_GET_CPU_VER:        
+        case OP_SYS_WAIT:              
         case OP_MATH_ABS:
         case OP_MATH_SIN:
         case OP_MATH_COS:
@@ -2924,22 +2970,14 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_STR_STR_REG_MEM_MEM:
             program_counter += 9; break; // Opcode (1) + Reg (1) + 2 Addresses (8)
             // System Library Opcodes have no operands after opcode byte itself in Pass 1
-        case OP_SYS_PRINT_CHAR:
-        case OP_SYS_CLEAR_SCREEN:
-        case OP_SYS_PRINT_STRING:
-        case OP_SYS_PRINT_NEWLINE:
-        case OP_SYS_SET_CURSOR_POS:
-        case OP_SYS_GET_CURSOR_POS:
-        case OP_SYS_SET_TEXT_COLOR:
+        case OP_SYS_SET_CURSOR_POS:      // sys.set_cursor_pos Reg, Reg
+        case OP_SYS_NUMBER_TO_STRING:    // sys.number_to_string Reg, Reg, Reg
+        case OP_SYS_READ_STRING:         // sys.read_string Reg, Reg
+        case OP_SYS_GET_CURSOR_POS:      // sys.get_cursor_pos Reg, Reg (for return)
+            program_counter += 3; break; // Opcode (1) + Reg (1) + Reg (1) (or + Reg + Reg + Reg for number_to_string)
         case OP_SYS_RESET_TEXT_COLOR:
-        case OP_SYS_PRINT_NUMBER_DEC:
-        case OP_SYS_PRINT_NUMBER_HEX:
-        case OP_SYS_NUMBER_TO_STRING:
-        case OP_SYS_READ_CHAR:
-        case OP_SYS_READ_STRING:
-        case OP_SYS_GET_KEY_PRESS:
-        case OP_SYS_GET_CPU_VER:
-        case OP_SYS_WAIT:
+        case OP_SYS_PRINT_NEWLINE:
+        case OP_SYS_CLEAR_SCREEN:
         case OP_NOP:
         case OP_HLT:
         case OP_RET:
@@ -3192,6 +3230,15 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_RND_REG:
         case OP_PUSH_REG:
         case OP_POP_REG:
+        case OP_SYS_PRINT_CHAR:        
+        case OP_SYS_PRINT_STRING:    
+        case OP_SYS_SET_TEXT_COLOR:      
+        case OP_SYS_PRINT_NUMBER_DEC:    
+        case OP_SYS_PRINT_NUMBER_HEX:   
+        case OP_SYS_READ_CHAR:          
+        case OP_SYS_GET_KEY_PRESS:      
+        case OP_SYS_GET_CPU_VER:       
+        case OP_SYS_WAIT:              
         case OP_MATH_ABS:
         case OP_MATH_SIN:
         case OP_MATH_COS:
@@ -3369,22 +3416,41 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
             break;
         }
         // System Library Opcodes - operands are registers, already available in registers array
-        case OP_SYS_PRINT_CHAR: // Argument in R0
-        case OP_SYS_CLEAR_SCREEN:
-        case OP_SYS_PRINT_STRING: // Address in R0
-        case OP_SYS_PRINT_NEWLINE:
-        case OP_SYS_SET_CURSOR_POS: // X in R0, Y in R1
-        case OP_SYS_GET_CURSOR_POS: // Results in R0, R1 (X, Y)
-        case OP_SYS_SET_TEXT_COLOR: // Color code in R0
+        case OP_SYS_SET_CURSOR_POS:      // sys.set_cursor_pos Reg, Reg
+        case OP_SYS_GET_CURSOR_POS:      // sys.get_cursor_pos Reg, Reg (return regs)
+        case OP_SYS_READ_STRING:         // sys.read_string Reg, Reg
+        {
+            RegisterIndex reg1 = register_from_string(reg1_str);
+            RegisterIndex reg2 = register_from_string(reg2_str);
+            if (reg1 == REG_INVALID || reg2 == REG_INVALID) {
+                fprintf(stderr, "Error: Invalid register(s) '%s, %s' for SYS call on line %d.\n", reg1_str, reg2_str, line_number);
+                fclose(asm_file);
+                fclose(rom_file);
+                return -1;
+            }
+            memory[program_counter++] = (uint8_t)reg1;
+            memory[program_counter++] = (uint8_t)reg2;
+            break;
+        }
+        case OP_SYS_NUMBER_TO_STRING:    // sys.number_to_string Reg, Reg, Reg
+        {
+            RegisterIndex reg1 = register_from_string(reg1_str);
+            RegisterIndex reg2 = register_from_string(reg2_str);
+            RegisterIndex reg3 = register_from_string(reg3_str);
+            if (reg1 == REG_INVALID || reg2 == REG_INVALID || reg3 == REG_INVALID) {
+                fprintf(stderr, "Error: Invalid register(s) '%s, %s, %s' for SYS call on line %d.\n", reg1_str, reg2_str, reg3_str, line_number);
+                fclose(asm_file);
+                fclose(rom_file);
+                return -1;
+            }
+            memory[program_counter++] = (uint8_t)reg1;
+            memory[program_counter++] = (uint8_t)reg2;
+            memory[program_counter++] = (uint8_t)reg3;
+            break;
+        }
         case OP_SYS_RESET_TEXT_COLOR:
-        case OP_SYS_PRINT_NUMBER_DEC: // Number in R0
-        case OP_SYS_PRINT_NUMBER_HEX: // Number in R0
-        case OP_SYS_NUMBER_TO_STRING: // Num in R0, addr in R1, size in R2
-        case OP_SYS_READ_CHAR: // Result in R0
-        case OP_SYS_READ_STRING: // Addr in R0, max_len in R1
-        case OP_SYS_GET_KEY_PRESS: // Result in R0
-        case OP_SYS_GET_CPU_VER: // Version in R0
-        case OP_SYS_WAIT: // Milliseconds in R0
+        case OP_SYS_PRINT_NEWLINE:
+        case OP_SYS_CLEAR_SCREEN:
         case OP_RET:
         case OP_NOP:
         case OP_HLT:
