@@ -35,6 +35,30 @@
 #define M_E 2.71828182845904523536
 #endif
 
+#ifndef M_SQRT2
+#define M_SQRT2 1.41421356237309504880
+#endif
+
+#ifndef M_LN2
+#define M_LN2 0.69314718055994530941
+#endif
+
+#ifndef M_LN10
+#define M_LN10 2.30258509299404568402
+#endif
+
+#ifndef M_LOG10E
+#define M_LOG10E 0.43429448190325182765
+#endif
+
+#ifndef M_EULER
+#define M_EULER 0.57721566490153286060
+#endif
+
+#ifndef M_GOLDEN_RATIO
+#define M_GOLDEN_RATIO 1.61803398874989484820
+#endif
+
 #define MAX_MACROS 65536
 #define MAX_LABELS 65536
 #define MAX_STRINGS 65536
@@ -2157,6 +2181,24 @@ double parse_value_double(const char* value_str) {
     }
     if (strcmp(value_str, "M_E") == 0) {
         return M_E;
+    }
+    if (strcmp(value_str, "M_SQRT2") == 0) {
+        return M_SQRT2;
+    }
+    if (strcmp(value_str, "M_LN2") == 0) {
+        return M_LN2;
+    }
+    if (strcmp(value_str, "M_LN10") == 0) {
+        return M_LN10;
+    }
+    if (strcmp(value_str, "M_LOG10E") == 0) {
+        return M_LOG10E;
+    }
+    if (strcmp(value_str, "M_EULER") == 0 || strcmp(value_str, "M_GAMMA") == 0) { 
+        return M_EULER; 
+    }
+    if (strcmp(value_str, "M_GOLDEN_RATIO") == 0 || strcmp(value_str, "M_PHI") == 0) {
+        return M_GOLDEN_RATIO; 
     }
     const char* macro_value_str = get_macro_value(value_str);
     if (macro_value_str != NULL) {
