@@ -186,7 +186,7 @@ Instructions are byte-encoded.  The first byte is the opcode.  Operands follow t
 | disk.create_image| 0x86         | None                                     | Create Disk Image: Create a new virtual disk image file.                         | None           |
 | disk.get_volume_label Mem| 0x87 | `Address_mem(uint32_t)`                 | Get Volume Label: Get the volume label of the disk and store it in memory.       | None           |
 | disk.set_volume_label Mem| 0x88 | `Address_mem(uint32_t)`                 | Set Volume Label: Set the volume label of the disk from memory.                 | None           |
-| disk.format_disk | 0x89        | None                                     | Format Disk:  (Not Implemented in provided code, opcode exists but no execution logic) | None           |
+| disk.format_disk	0x89| 	None| 	Format Disk: Formats the virtual disk image, overwriting all data. Creates a new header and fills data area with zeros.|	None    |
 
 
 **Register Encoding:**
