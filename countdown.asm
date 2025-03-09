@@ -6,8 +6,9 @@ MOV R0, 100       ; Initialize counter to 100
 countdown_loop:
     sys.print_number_dec R0    ; Print counter R0
     sys.newline                ; Print newline
-
-    sys.wait 100              ; Wait for 100 milliseconds
+	
+	MOV R3, 100
+    sys.wait R3              ; Wait for 100 milliseconds
 
     MOV R1, 1           ; Value to subtract
     math.sub R0, R1     ; Decrement counter R0 by 1
