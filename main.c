@@ -224,6 +224,7 @@ DiskResultCode disk_write_sector(uint32_t sector_number, uint32_t address_mem, u
 DiskResultCode disk_get_volume_label(uint32_t address_mem);
 DiskResultCode disk_set_volume_label(uint32_t address_mem);
 DiskResultCode create_disk_image();
+DiskResultCode format_disk();
 
 // System Library Functions
 
@@ -602,6 +603,53 @@ DiskResultCode create_disk_image() {
 
     fclose(disk_image_file);
     printf("Disk image '%s' created successfully.\n", DISK_IMAGE_FILENAME);
+    return DISK_OK;
+}
+
+DiskResultCode format_disk() {
+    FILE* disk_image_file = fopen(DISK_IMAGE_FILENAME, "wb+"); 
+    if (!disk_image_file) {
+        perror("Error opening disk image file for formatting");
+        return DISK_OPEN_ERROR; 
+    }
+
+    DiskHeader header;
+    header.magic_number = DISK_MAGIC_NUMBER;
+    header.version = DISK_VERSION;
+    header.sector_size = DISK_SECTOR_SIZE;
+    header.num_sectors = DISK_NUM_SECTORS;
+    strncpy(header.volume_label, "FORMATTED", sizeof(header.volume_label) - 1); 
+    header.volume_label[sizeof(header.volume_label) - 1] = '\0';
+    memset(header.reserved, 0, sizeof(header.reserved));
+
+
+    if (fwrite(&header, sizeof(DiskHeader), 1, disk_image_file) != 1) {
+        fclose(disk_image_file);
+        perror("Error writing disk header during format");
+        return DISK_WRITE_ERROR;
+    }
+
+    size_t data_size = DISK_SIZE_BYTES - DISK_SECTOR_SIZE;
+    char zero_buffer[4096] = { 0 };
+    size_t sectors_to_write = data_size / sizeof(zero_buffer);
+    for (size_t i = 0; i < sectors_to_write; ++i) {
+        if (fwrite(zero_buffer, sizeof(zero_buffer), 1, disk_image_file) != 1) {
+            fclose(disk_image_file);
+            perror("Error writing disk data during format");
+            return DISK_WRITE_ERROR;
+        }
+    }
+    size_t remaining_bytes = data_size % sizeof(zero_buffer);
+    if (remaining_bytes > 0) {
+        if (fwrite(zero_buffer, remaining_bytes, 1, disk_image_file) != 1) {
+            fclose(disk_image_file);
+            perror("Error writing remaining disk data during format");
+            return DISK_WRITE_ERROR;
+        }
+    }
+
+    fclose(disk_image_file);
+    printf("Disk image '%s' formatted successfully.\n", DISK_IMAGE_FILENAME);
     return DISK_OK;
 }
 
@@ -1829,6 +1877,14 @@ void execute_instruction(Opcode opcode) {
         }
         break;
     }
+    case OP_DISK_FORMAT_DISK: {
+        if (debug_mode) printf("disk.format_disk\n");
+        DiskResultCode result = format_disk();
+        if (result != DISK_OK) {
+            printf("DISK Error: Format Disk failed with code %d\n", result);
+        }
+        break;
+    }
     case OP_DISK_GET_VOLUME_LABEL_MEM: {
         address = decode_address();
         if (debug_mode) printf("disk.get_volume_label [%u]\n", address);
@@ -2041,6 +2097,7 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, ch
         else if (strcmp(disk_func, "create_image") == 0) return OP_DISK_CREATE_IMAGE;
         else if (strcmp(disk_func, "get_volume_label") == 0) { if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1)) return OP_DISK_GET_VOLUME_LABEL_MEM; }
         else if (strcmp(disk_func, "set_volume_label") == 0) { if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1)) return OP_DISK_SET_VOLUME_LABEL_MEM; }
+        else if (strcmp(disk_func, "format_disk") == 0) return OP_DISK_FORMAT_DISK;
     }
 
     return OP_INVALID;
