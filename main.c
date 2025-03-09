@@ -20,7 +20,7 @@
 
 #define MEMORY_SIZE (16384 * 1024) // 16MB Memory
 #define NUM_GENERAL_REGISTERS 32
-#define CPU_VER 4
+#define CPU_VER 5
 #define MAX_PREPROCESSOR_DEPTH 10
 
 #define CLOCK_SPEED_MHZ 4.77
@@ -71,6 +71,7 @@ typedef enum {
     OP_PUSH_REG, OP_POP_REG,
     OP_CALL_ADDR, OP_RET,
     OP_XCHG_REG_REG, OP_BSWAP_REG, OP_SETZ_REG, OP_SETNZ_REG,
+    OP_PUSHA, OP_POPA, OP_PUSHFD, OP_POPFD,
 
     // Math Standard Library
     OP_MATH_ADD, OP_MATH_SUB, OP_MATH_MUL, OP_MATH_DIV, OP_MATH_MOD,
@@ -163,6 +164,7 @@ uint32_t data_section_start = 0;
 int cursor_x = 0;
 int cursor_y = 0;
 int text_color = 7;
+extern bool debug_mode;
 
 #ifndef _WIN32
 struct termios original_termios;
@@ -696,6 +698,22 @@ void set_overflow_flag_int(uint32_t result, uint32_t operand1, uint32_t operand2
     }
 }
 
+const char* register_string(RegisterIndex reg) {
+    switch (reg) {
+    case REG_R0: return "R0"; case REG_R1: return "R1"; case REG_R2: return "R2"; case REG_R3: return "R3";
+    case REG_R4: return "R4"; case REG_R5: return "R5"; case REG_R6: return "R6"; case REG_R7: return "R7";
+    case REG_R8: return "R8"; case REG_R9: return "R9"; case REG_R10: return "R10"; case REG_R11: return "R11";
+    case REG_R12: return "R12"; case REG_R13: return "R13"; case REG_R14: return "R14"; case REG_R15: return "R15";
+    case REG_R16: return "R16"; case REG_R17: return "R17"; case REG_R18: return "R18"; case REG_R19: return "R19";
+    case REG_R20: return "R20"; case REG_R21: return "R21"; case REG_R22: return "R22"; case REG_R23: return "R23";
+    case REG_R24: return "R24"; case REG_R25: return "R25"; case REG_R26: return "R26"; case REG_R27: return "R27";
+    case REG_R28: return "R28"; case REG_R29: return "R29"; case REG_R30: return "R30"; case REG_R31: return "R31";
+    case REG_SP: return "SP";
+    case REG_ZF: return "ZF"; case REG_SF: return "SF"; case REG_CF: return "CF"; case REG_OF: return "OF";
+    default: return "INVALID_REG";
+    }
+}
+
 // CPU Instruction Execution
 void execute_instruction(Opcode opcode) {
     RegisterIndex reg1, reg2, reg3, reg_dest, reg_src;
@@ -703,10 +721,13 @@ void execute_instruction(Opcode opcode) {
     uint32_t value_uint32, address, count;
 
     switch (opcode) {
-    case OP_NOP: break;
+    case OP_NOP:
+        if (debug_mode) printf("NOP\n");
+        break;
     case OP_MOV_REG_REG: {
         reg_dest = decode_register();
         reg_src = decode_register();
+        if (debug_mode) printf("MOV %s, %s\n", register_string(reg_dest), register_string(reg_src));
         if (reg_dest != REG_INVALID && reg_src != REG_INVALID) {
             registers[reg_dest] = registers[reg_src];
         }
@@ -715,6 +736,7 @@ void execute_instruction(Opcode opcode) {
     case OP_MOV_REG_VAL: {
         reg_dest = decode_register();
         value_double = decode_value_double();
+        if (debug_mode) printf("MOV %s, %f\n", register_string(reg_dest), value_double);
         if (reg_dest != REG_INVALID) {
             registers[reg_dest] = value_double;
         }
@@ -723,18 +745,21 @@ void execute_instruction(Opcode opcode) {
     case OP_MOV_REG_MEM: {
         reg1 = decode_register();
         address = decode_address();
+        if (debug_mode) printf("MOV %s, [%u]\n", register_string(reg1), address);
         if (reg1 != REG_INVALID && address < MEMORY_SIZE - 8) registers[reg1] = *(double*)&memory[address];
         break;
     }
     case OP_MOV_MEM_REG: {
         address = decode_address();
         reg1 = decode_register();
+        if (debug_mode) printf("MOV [%u], %s\n", address, register_string(reg1));
         if (reg1 != REG_INVALID && address < MEMORY_SIZE - 8) *(double*)&memory[address] = registers[reg1];
         break;
     }
     case OP_ADD_REG_REG: {
         reg1 = decode_register();
         reg2 = decode_register();
+        if (debug_mode) printf("ADD %s, %s\n", register_string(reg1), register_string(reg2));
         if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
             double result = registers[reg1] + registers[reg2];
             set_carry_flag_float(result, registers[reg1], registers[reg2], opcode);
@@ -748,6 +773,7 @@ void execute_instruction(Opcode opcode) {
     case OP_ADD_REG_VAL: {
         reg1 = decode_register();
         value_double = decode_value_double();
+        if (debug_mode) printf("ADD %s, %f\n", register_string(reg1), value_double);
         if (reg1 != REG_INVALID) {
             double result = registers[reg1] + value_double;
             set_carry_flag_float(result, registers[reg1], value_double, opcode);
@@ -761,6 +787,7 @@ void execute_instruction(Opcode opcode) {
     case OP_SUB_REG_REG: {
         reg1 = decode_register();
         reg2 = decode_register();
+        if (debug_mode) printf("SUB %s, %s\n", register_string(reg1), register_string(reg2));
         if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
             double result = registers[reg1] - registers[reg2];
             set_carry_flag_float(result, registers[reg1], registers[reg2], opcode);
@@ -774,6 +801,7 @@ void execute_instruction(Opcode opcode) {
     case OP_SUB_REG_VAL: {
         reg1 = decode_register();
         value_double = decode_value_double();
+        if (debug_mode) printf("SUB %s, %f\n", register_string(reg1), value_double);
         if (reg1 != REG_INVALID) {
             double result = registers[reg1] - value_double;
             set_carry_flag_float(result, registers[reg1], value_double, opcode);
@@ -787,6 +815,7 @@ void execute_instruction(Opcode opcode) {
     case OP_MUL_REG_REG: {
         reg1 = decode_register();
         reg2 = decode_register();
+        if (debug_mode) printf("MUL %s, %s\n", register_string(reg1), register_string(reg2));
         if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
             double result = registers[reg1] * registers[reg2];
             set_carry_flag_float(result, registers[reg1], registers[reg2], opcode);
@@ -800,6 +829,7 @@ void execute_instruction(Opcode opcode) {
     case OP_MUL_REG_VAL: {
         reg1 = decode_register();
         value_double = decode_value_double();
+        if (debug_mode) printf("MUL %s, %f\n", register_string(reg1), value_double);
         if (reg1 != REG_INVALID) {
             double result = registers[reg1] * value_double;
             set_carry_flag_float(result, registers[reg1], value_double, opcode);
@@ -813,6 +843,7 @@ void execute_instruction(Opcode opcode) {
     case OP_DIV_REG_REG: {
         reg1 = decode_register();
         reg2 = decode_register();
+        if (debug_mode) printf("DIV %s, %s\n", register_string(reg1), register_string(reg2));
         if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
             if (fabs(registers[reg2]) > 1e-9) {
                 double result = registers[reg1] / registers[reg2];
@@ -832,6 +863,7 @@ void execute_instruction(Opcode opcode) {
     case OP_DIV_REG_VAL: {
         reg1 = decode_register();
         value_double = decode_value_double();
+        if (debug_mode) printf("DIV %s, %f\n", register_string(reg1), value_double);
         if (reg1 != REG_INVALID) {
             if (fabs(value_double) > 1e-9) {
                 double result = registers[reg1] / value_double;
@@ -851,6 +883,7 @@ void execute_instruction(Opcode opcode) {
     case OP_MOD_REG_REG: {
         reg1 = decode_register();
         reg2 = decode_register();
+        if (debug_mode) printf("MOD %s, %s\n", register_string(reg1), register_string(reg2));
         if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
             if (fabs(registers[reg2]) > 1e-9) {
                 double result = fmod(registers[reg1], registers[reg2]);
@@ -870,6 +903,7 @@ void execute_instruction(Opcode opcode) {
     case OP_MOD_REG_VAL: {
         reg1 = decode_register();
         value_double = decode_value_double();
+        if (debug_mode) printf("MOD %s, %f\n", register_string(reg1), value_double);
         if (reg1 != REG_INVALID) {
             if (fabs(value_double) > 1e-9) {
                 double result = fmod(registers[reg1], value_double);
@@ -889,6 +923,7 @@ void execute_instruction(Opcode opcode) {
     case OP_AND_REG_REG: {
         reg1 = decode_register();
         reg2 = decode_register();
+        if (debug_mode) printf("AND %s, %s\n", register_string(reg1), register_string(reg2));
         if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
             uint32_t val1 = (uint32_t)registers[reg1];
             uint32_t val2 = (uint32_t)registers[reg2];
@@ -904,6 +939,7 @@ void execute_instruction(Opcode opcode) {
     case OP_AND_REG_VAL: {
         reg1 = decode_register();
         value_uint32 = decode_value_uint32();
+        if (debug_mode) printf("AND %s, %u\n", register_string(reg1), value_uint32);
         if (reg1 != REG_INVALID) {
             uint32_t val1 = (uint32_t)registers[reg1];
             uint32_t val2 = value_uint32;
@@ -919,6 +955,7 @@ void execute_instruction(Opcode opcode) {
     case OP_OR_REG_REG: {
         reg1 = decode_register();
         reg2 = decode_register();
+        if (debug_mode) printf("OR %s, %s\n", register_string(reg1), register_string(reg2));
         if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
             uint32_t val1 = (uint32_t)registers[reg1];
             uint32_t val2 = (uint32_t)registers[reg2];
@@ -934,6 +971,7 @@ void execute_instruction(Opcode opcode) {
     case OP_OR_REG_VAL: {
         reg1 = decode_register();
         value_uint32 = decode_value_uint32();
+        if (debug_mode) printf("OR %s, %u\n", register_string(reg1), value_uint32);
         if (reg1 != REG_INVALID) {
             uint32_t val1 = (uint32_t)registers[reg1];
             uint32_t val2 = value_uint32;
@@ -949,6 +987,7 @@ void execute_instruction(Opcode opcode) {
     case OP_XOR_REG_REG: {
         reg1 = decode_register();
         reg2 = decode_register();
+        if (debug_mode) printf("XOR %s, %s\n", register_string(reg1), register_string(reg2));
         if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
             uint32_t val1 = (uint32_t)registers[reg1];
             uint32_t val2 = (uint32_t)registers[reg2];
@@ -964,6 +1003,7 @@ void execute_instruction(Opcode opcode) {
     case OP_XOR_REG_VAL: {
         reg1 = decode_register();
         value_uint32 = decode_value_uint32();
+        if (debug_mode) printf("XOR %s, %u\n", register_string(reg1), value_uint32);
         if (reg1 != REG_INVALID) {
             uint32_t val1 = (uint32_t)registers[reg1];
             uint32_t val2 = value_uint32;
@@ -978,6 +1018,7 @@ void execute_instruction(Opcode opcode) {
     }
     case OP_NOT_REG: {
         reg1 = decode_register();
+        if (debug_mode) printf("NOT %s\n", register_string(reg1));
         if (reg1 != REG_INVALID) {
             uint32_t val1 = (uint32_t)registers[reg1];
             uint32_t result = ~val1;
@@ -991,6 +1032,7 @@ void execute_instruction(Opcode opcode) {
     }
     case OP_NEG_REG: {
         reg1 = decode_register();
+        if (debug_mode) printf("NEG %s\n", register_string(reg1));
         if (reg1 != REG_INVALID) {
             int32_t val1 = (int32_t)registers[reg1];
             int32_t result = -val1;
@@ -1005,6 +1047,7 @@ void execute_instruction(Opcode opcode) {
     case OP_TEST_REG_REG: {
         reg1 = decode_register();
         reg2 = decode_register();
+        if (debug_mode) printf("TEST %s, %s\n", register_string(reg1), register_string(reg2));
         if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
             uint32_t val1 = (uint32_t)registers[reg1];
             uint32_t val2 = (uint32_t)registers[reg2];
@@ -1019,6 +1062,7 @@ void execute_instruction(Opcode opcode) {
     case OP_TEST_REG_VAL: {
         reg1 = decode_register();
         value_uint32 = decode_value_uint32();
+        if (debug_mode) printf("TEST %s, %u\n", register_string(reg1), value_uint32);
         if (reg1 != REG_INVALID) {
             uint32_t val1 = (uint32_t)registers[reg1];
             uint32_t val2 = value_uint32;
@@ -1034,8 +1078,14 @@ void execute_instruction(Opcode opcode) {
     case OP_SHL_REG_VAL: {
         uint32_t val1, val2, result = 0;
         reg1 = decode_register();
-        if (opcode == OP_SHL_REG_VAL) value_uint32 = decode_value_uint32();
-        else reg2 = decode_register();
+        if (opcode == OP_SHL_REG_VAL) {
+            value_uint32 = decode_value_uint32();
+            if (debug_mode) printf("SHL %s, %u\n", register_string(reg1), value_uint32);
+        }
+        else {
+            reg2 = decode_register();
+            if (debug_mode) printf("SHL %s, %s\n", register_string(reg1), register_string(reg2));
+        }
 
         if (reg1 != REG_INVALID) {
             val1 = (uint32_t)registers[reg1];
@@ -1054,8 +1104,14 @@ void execute_instruction(Opcode opcode) {
     case OP_SHR_REG_VAL: {
         uint32_t val1, val2, result = 0;
         reg1 = decode_register();
-        if (opcode == OP_SHR_REG_VAL) value_uint32 = decode_value_uint32();
-        else reg2 = decode_register();
+        if (opcode == OP_SHR_REG_VAL) {
+            value_uint32 = decode_value_uint32();
+            if (debug_mode) printf("SHR %s, %u\n", register_string(reg1), value_uint32);
+        }
+        else {
+            reg2 = decode_register();
+            if (debug_mode) printf("SHR %s, %s\n", register_string(reg1), register_string(reg2));
+        }
 
         if (reg1 != REG_INVALID) {
             val1 = (uint32_t)registers[reg1];
@@ -1074,8 +1130,14 @@ void execute_instruction(Opcode opcode) {
     case OP_SAR_REG_VAL: {
         uint32_t val1, val2, result = 0;
         reg1 = decode_register();
-        if (opcode == OP_SAR_REG_VAL) value_uint32 = decode_value_uint32();
-        else reg2 = decode_register();
+        if (opcode == OP_SAR_REG_VAL) {
+            value_uint32 = decode_value_uint32();
+            if (debug_mode) printf("SAR %s, %u\n", register_string(reg1), value_uint32);
+        }
+        else {
+            reg2 = decode_register();
+            if (debug_mode) printf("SAR %s, %s\n", register_string(reg1), register_string(reg2));
+        }
 
         if (reg1 != REG_INVALID) {
             val1 = (uint32_t)registers[reg1];
@@ -1094,8 +1156,14 @@ void execute_instruction(Opcode opcode) {
     case OP_ROL_REG_VAL: {
         uint32_t val1, val2, result = 0;
         reg1 = decode_register();
-        if (opcode == OP_ROL_REG_VAL) value_uint32 = decode_value_uint32();
-        else reg2 = decode_register();
+        if (opcode == OP_ROL_REG_VAL) {
+            value_uint32 = decode_value_uint32();
+            if (debug_mode) printf("ROL %s, %u\n", register_string(reg1), value_uint32);
+        }
+        else {
+            reg2 = decode_register();
+            if (debug_mode) printf("ROL %s, %s\n", register_string(reg1), register_string(reg2));
+        }
 
         if (reg1 != REG_INVALID) {
             val1 = (uint32_t)registers[reg1];
@@ -1115,8 +1183,14 @@ void execute_instruction(Opcode opcode) {
     case OP_ROR_REG_VAL: {
         uint32_t val1, val2, result = 0;
         reg1 = decode_register();
-        if (opcode == OP_ROR_REG_VAL) value_uint32 = decode_value_uint32();
-        else reg2 = decode_register();
+        if (opcode == OP_ROR_REG_VAL) {
+            value_uint32 = decode_value_uint32();
+            if (debug_mode) printf("ROR %s, %u\n", register_string(reg1), value_uint32);
+        }
+        else {
+            reg2 = decode_register();
+            if (debug_mode) printf("ROR %s, %s\n", register_string(reg1), register_string(reg2));
+        }
 
         if (reg1 != REG_INVALID) {
             val1 = (uint32_t)registers[reg1];
@@ -1135,8 +1209,14 @@ void execute_instruction(Opcode opcode) {
     case OP_CMP_REG_REG:
     case OP_CMP_REG_VAL: {
         reg1 = decode_register();
-        if (opcode == OP_CMP_REG_VAL) value_double = decode_value_double();
-        else reg2 = decode_register();
+        if (opcode == OP_CMP_REG_VAL) {
+            value_double = decode_value_double();
+            if (debug_mode) printf("CMP %s, %f\n", register_string(reg1), value_double);
+        }
+        else {
+            reg2 = decode_register();
+            if (debug_mode) printf("CMP %s, %s\n", register_string(reg1), register_string(reg2));
+        }
 
         if (reg1 != REG_INVALID) {
             double val1 = registers[reg1];
@@ -1152,6 +1232,8 @@ void execute_instruction(Opcode opcode) {
     case OP_IDIV_REG_REG: {
         reg1 = decode_register();
         reg2 = decode_register();
+        if (opcode == OP_IMUL_REG_REG) if (debug_mode) printf("IMUL %s, %s\n", register_string(reg1), register_string(reg2));
+        else if (debug_mode) printf("IDIV %s, %s\n", register_string(reg1), register_string(reg2));
         if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
             if (opcode == OP_IMUL_REG_REG) registers[reg1] = (double)((int32_t)registers[reg1] * (int32_t)registers[reg2]);
             else if (opcode == OP_IDIV_REG_REG) {
@@ -1171,8 +1253,17 @@ void execute_instruction(Opcode opcode) {
     case OP_MOVSX_REG_MEM:
     case OP_LEA_REG_MEM: {
         reg_dest = decode_register();
-        if (opcode == OP_MOVZX_REG_REG || opcode == OP_MOVSX_REG_REG) reg_src = decode_register();
-        else address = decode_address();
+        if (opcode == OP_MOVZX_REG_REG || opcode == OP_MOVSX_REG_REG) {
+            reg_src = decode_register();
+            if (opcode == OP_MOVZX_REG_REG) if (debug_mode) printf("MOVZX %s, %s\n", register_string(reg_dest), register_string(reg_src));
+            else if (debug_mode) printf("MOVSX %s, %s\n", register_string(reg_dest), register_string(reg_src));
+        }
+        else {
+            address = decode_address();
+            if (opcode == OP_MOVZX_REG_MEM) if (debug_mode) printf("MOVZX %s, [%u]\n", register_string(reg_dest), address);
+            else if (debug_mode) printf("MOVSX %s, [%u]\n", register_string(reg_dest), address);
+            else if (debug_mode) printf("LEA %s, [%u]\n", register_string(reg_dest), address);
+        }
 
         if (reg_dest != REG_INVALID) {
             if (opcode == OP_MOVZX_REG_REG) registers[reg_dest] = (double)(uint32_t)registers[reg_src];
@@ -1199,6 +1290,21 @@ void execute_instruction(Opcode opcode) {
     case OP_CALL_ADDR: {
         address = decode_address();
         bool jump = false;
+        if (opcode == OP_JMP && debug_mode) printf("JMP %u\n", address);
+        else if (opcode == OP_JMP_NZ && debug_mode) printf("JNZ %u\n", address);
+        else if (opcode == OP_JMP_Z && debug_mode) printf("JZ %u\n", address);
+        else if (opcode == OP_JMP_S && debug_mode) printf("JS %u\n", address);
+        else if (opcode == OP_JMP_NS && debug_mode) printf("JNS %u\n", address);
+        else if (opcode == OP_JMP_C && debug_mode) printf("JC %u\n", address);
+        else if (opcode == OP_JMP_NC && debug_mode) printf("JNC %u\n", address);
+        else if (opcode == OP_JMP_O && debug_mode) printf("JO %u\n", address);
+        else if (opcode == OP_JMP_NO && debug_mode) printf("JNO %u\n", address);
+        else if (opcode == OP_JMP_GE && debug_mode) printf("JGE %u\n", address);
+        else if (opcode == OP_JMP_LE && debug_mode) printf("JLE %u\n", address);
+        else if (opcode == OP_JMP_G && debug_mode) printf("JG %u\n", address);
+        else if (opcode == OP_JMP_L && debug_mode) printf("JL %u\n", address);
+        else if (opcode == OP_CALL_ADDR && debug_mode) printf("CALL %u\n", address);
+
         if (opcode == OP_JMP) jump = true;
         else if (opcode == OP_JMP_NZ && !registers[REG_ZF]) jump = true;
         else if (opcode == OP_JMP_Z && registers[REG_ZF]) jump = true;
@@ -1222,10 +1328,14 @@ void execute_instruction(Opcode opcode) {
         }
         break;
     }
-    case OP_HLT: running = false; break;
+    case OP_HLT:
+        if (debug_mode) printf("HLT\n");
+        running = false; break;
     case OP_INC_REG:
     case OP_DEC_REG: {
         reg1 = decode_register();
+        if (opcode == OP_INC_REG) if (debug_mode) printf("INC %s\n", register_string(reg1));
+        else if (debug_mode) printf("DEC %s\n", register_string(reg1));
         if (reg1 != REG_INVALID) {
             if (opcode == OP_INC_REG) registers[reg1]++;
             else registers[reg1]--;
@@ -1239,6 +1349,8 @@ void execute_instruction(Opcode opcode) {
     case OP_INC_MEM:
     case OP_DEC_MEM: {
         address = decode_address();
+        if (opcode == OP_INC_MEM) if (debug_mode) printf("INC [%u]\n", address);
+        else if (debug_mode) printf("DEC [%u]\n", address);
         if (address < MEMORY_SIZE - 8) {
             double val = *(double*)&memory[address];
             if (opcode == OP_INC_MEM) val++;
@@ -1249,11 +1361,13 @@ void execute_instruction(Opcode opcode) {
     }
     case OP_RND_REG: {
         reg1 = decode_register();
+        if (debug_mode) printf("RND %s\n", register_string(reg1));
         if (reg1 != REG_INVALID) registers[reg1] = (double)rand();
         break;
     }
     case OP_PUSH_REG: {
         reg1 = decode_register();
+        if (debug_mode) printf("PUSH %s\n", register_string(reg1));
         if (reg1 != REG_INVALID) {
             registers[REG_SP] -= 8;
             if ((int32_t)registers[REG_SP] < 0) { printf("Stack Overflow!\n"); running = false; break; }
@@ -1263,6 +1377,7 @@ void execute_instruction(Opcode opcode) {
     }
     case OP_POP_REG: {
         reg1 = decode_register();
+        if (debug_mode) printf("POP %s\n", register_string(reg1));
         if (reg1 != REG_INVALID) {
             if ((uint32_t)registers[REG_SP] >= MEMORY_SIZE) { printf("Stack Underflow!\n"); running = false; break; }
             registers[reg1] = *(double*)&memory[(uint32_t)registers[REG_SP]];
@@ -1271,6 +1386,7 @@ void execute_instruction(Opcode opcode) {
         break;
     }
     case OP_RET: {
+        if (debug_mode) printf("RET\n");
         if ((uint32_t)registers[REG_SP] >= MEMORY_SIZE) { printf("Stack Underflow during RET!\n"); running = false; break; }
         program_counter = (uint32_t) * (double*)&memory[(uint32_t)registers[REG_SP]];
         registers[REG_SP] += 8;
@@ -1279,6 +1395,7 @@ void execute_instruction(Opcode opcode) {
     case OP_XCHG_REG_REG: {
         reg1 = decode_register();
         reg2 = decode_register();
+        if (debug_mode) printf("XCHG %s, %s\n", register_string(reg1), register_string(reg2));
         if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
             double temp = registers[reg1];
             registers[reg1] = registers[reg2];
@@ -1288,6 +1405,7 @@ void execute_instruction(Opcode opcode) {
     }
     case OP_BSWAP_REG: {
         reg1 = decode_register();
+        if (debug_mode) printf("BSWAP %s\n", register_string(reg1));
         if (reg1 != REG_INVALID) {
             uint32_t val = (uint32_t)registers[reg1];
             uint32_t bswap_val = ((val >> 24) & 0x000000FF) | ((val >> 8) & 0x0000FF00) | ((val << 8) & 0x00FF0000) | ((val << 24) & 0xFF000000);
@@ -1298,18 +1416,67 @@ void execute_instruction(Opcode opcode) {
     case OP_SETZ_REG:
     case OP_SETNZ_REG: {
         reg1 = decode_register();
+        if (opcode == OP_SETZ_REG) if (debug_mode) printf("SETZ %s\n", register_string(reg1));
+        else if (debug_mode) printf("SETNZ %s\n", register_string(reg1));
         if (reg1 != REG_INVALID) {
             registers[reg1] = (opcode == OP_SETZ_REG) ? registers[REG_ZF] : !registers[REG_ZF];
         }
         break;
     }
+    case OP_PUSHA:
+        if (debug_mode) printf("PUSHA\n");
+        for (int i = 0; i < NUM_GENERAL_REGISTERS; i++) {
+            registers[REG_SP] -= 8;
+            if ((int32_t)registers[REG_SP] < 0) { printf("Stack Overflow during PUSHA!\n"); running = false; return; }
+            *(double*)&memory[(uint32_t)registers[REG_SP]] = registers[i];
+        }
+        break;
+    case OP_POPA:
+        if (debug_mode) printf("POPA\n");
+        for (int i = NUM_GENERAL_REGISTERS - 1; i >= 0; i--) {
+            if ((uint32_t)registers[REG_SP] >= MEMORY_SIZE) { printf("Stack Underflow during POPA!\n"); running = false; return; }
+            registers[i] = *(double*)&memory[(uint32_t)registers[REG_SP]];
+            registers[REG_SP] += 8;
+        }
+        break;
+    case OP_PUSHFD:
+        if (debug_mode) printf("PUSHFD\n");
+        registers[REG_SP] -= 8;
+        if ((int32_t)registers[REG_SP] < 0) { printf("Stack Overflow during PUSHFD!\n"); running = false; return; }
+        uint32_t flags = 0;
+        if (registers[REG_ZF]) flags |= 1;
+        if (registers[REG_SF]) flags |= 2;
+        if (registers[REG_CF]) flags |= 4;
+        if (registers[REG_OF]) flags |= 8;
+        *(double*)&memory[(uint32_t)registers[REG_SP]] = (double)flags;
+        break;
+    case OP_POPFD:
+        if (debug_mode) printf("POPFD\n");
+        if ((uint32_t)registers[REG_SP] >= MEMORY_SIZE) { printf("Stack Underflow during POPFD!\n"); running = false; return; }
+        flags = (uint32_t) * (double*)&memory[(uint32_t)registers[REG_SP]];
+        registers[REG_SP] += 8;
+        registers[REG_ZF] = (flags & 1) != 0;
+        registers[REG_SF] = (flags & 2) != 0;
+        registers[REG_CF] = (flags & 4) != 0;
+        registers[REG_OF] = (flags & 8) != 0;
+        break;
 
-                     // Math Standard Library Implementation
+        // Math Standard Library Implementation
     case OP_MATH_ADD: case OP_MATH_SUB: case OP_MATH_MUL: case OP_MATH_DIV: case OP_MATH_MOD:
     case OP_MATH_POW: case OP_MATH_MIN: case OP_MATH_MAX: case OP_MATH_ATAN2:
     {
         reg1 = decode_register();
         reg2 = decode_register();
+        if (opcode == OP_MATH_ADD && debug_mode) printf("math.add %s, %s\n", register_string(reg1), register_string(reg2));
+        else if (opcode == OP_MATH_SUB && debug_mode) printf("math.sub %s, %s\n", register_string(reg1), register_string(reg2));
+        else if (opcode == OP_MATH_MUL && debug_mode) printf("math.mul %s, %s\n", register_string(reg1), register_string(reg2));
+        else if (opcode == OP_MATH_DIV && debug_mode) printf("math.div %s, %s\n", register_string(reg1), register_string(reg2));
+        else if (opcode == OP_MATH_MOD && debug_mode) printf("math.mod %s, %s\n", register_string(reg1), register_string(reg2));
+        else if (opcode == OP_MATH_POW && debug_mode) printf("math.pow %s, %s\n", register_string(reg1), register_string(reg2));
+        else if (opcode == OP_MATH_MIN && debug_mode) printf("math.min %s, %s\n", register_string(reg1), register_string(reg2));
+        else if (opcode == OP_MATH_MAX && debug_mode) printf("math.max %s, %s\n", register_string(reg1), register_string(reg2));
+        else if (opcode == OP_MATH_ATAN2 && debug_mode) printf("math.atan2 %s, %s\n", register_string(reg1), register_string(reg2));
+
         if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
             double result = 0;
             if (opcode == OP_MATH_ADD) result = registers[reg1] + registers[reg2];
@@ -1339,6 +1506,7 @@ void execute_instruction(Opcode opcode) {
         if (opcode == OP_MATH_CLAMP) {
             reg2 = decode_register();
             reg3 = decode_register();
+            if (debug_mode) printf("math.clamp %s, %s, %s\n", register_string(reg1), register_string(reg2), register_string(reg3));
             if (reg1 != REG_INVALID && reg2 != REG_INVALID && reg3 != REG_INVALID) {
                 registers[reg1] = fmax(registers[reg2], fmin(registers[reg1], registers[reg3]));
             }
@@ -1348,6 +1516,7 @@ void execute_instruction(Opcode opcode) {
             reg2 = decode_register();
             reg3 = decode_register();
             RegisterIndex reg4 = decode_register();
+            if (debug_mode) printf("math.lerp %s, %s, %s, %s\n", register_string(reg1), register_string(reg2), register_string(reg3), register_string(reg4));
             if (reg1 != REG_INVALID && reg2 != REG_INVALID && reg3 != REG_INVALID && reg4 != REG_INVALID) {
                 registers[reg1] = registers[reg2] + (registers[reg3] - registers[reg2]) * registers[reg4];
             }
@@ -1356,21 +1525,87 @@ void execute_instruction(Opcode opcode) {
 
         if (reg1 != REG_INVALID) {
             double result = 0;
-            if (opcode == OP_MATH_ABS) result = fabs(registers[reg1]);
-            else if (opcode == OP_MATH_SIN) result = sin(registers[reg1]);
-            else if (opcode == OP_MATH_COS) result = cos(registers[reg1]);
-            else if (opcode == OP_MATH_TAN) result = tan(registers[reg1]);
-            else if (opcode == OP_MATH_ASIN) result = asin(registers[reg1]);
-            else if (opcode == OP_MATH_ACOS) result = acos(registers[reg1]);
-            else if (opcode == OP_MATH_ATAN) result = atan(registers[reg1]);
-            else if (opcode == OP_MATH_SQRT) { if (registers[reg1] >= 0) result = sqrt(registers[reg1]); else { printf("Math Error: Sqrt of negative!\n"); running = false; break; } }
-            else if (opcode == OP_MATH_LOG) { if (registers[reg1] > 0) result = log(registers[reg1]); else { printf("Math Error: Log of non-positive!\n"); running = false; break; } }
-            else if (opcode == OP_MATH_EXP) result = exp(registers[reg1]);
-            else if (opcode == OP_MATH_FLOOR) result = floor(registers[reg1]);
-            else if (opcode == OP_MATH_CEIL) result = ceil(registers[reg1]);
-            else if (opcode == OP_MATH_ROUND) result = round(registers[reg1]);
-            else if (opcode == OP_MATH_NEG) result = -registers[reg1];
-            else if (opcode == OP_MATH_LOG10) { if (registers[reg1] > 0) result = log10(registers[reg1]); else { printf("Math Error: Log10 of non-positive!\n"); running = false; break; } }
+            if (opcode == OP_MATH_ABS && debug_mode) {
+                printf("math.abs %s\n", register_string(reg1));
+                result = fabs(registers[reg1]);
+            }
+            else if (opcode == OP_MATH_SIN && debug_mode) {
+                printf("math.sin %s\n", register_string(reg1));
+                result = sin(registers[reg1]);
+            }
+            else if (opcode == OP_MATH_COS && debug_mode) {
+                printf("math.cos %s\n", register_string(reg1));
+                result = cos(registers[reg1]);
+            }
+            else if (opcode == OP_MATH_TAN && debug_mode) {
+                printf("math.tan %s\n", register_string(reg1));
+                result = tan(registers[reg1]);
+            }
+            else if (opcode == OP_MATH_ASIN && debug_mode) {
+                printf("math.asin %s\n", register_string(reg1));
+                result = asin(registers[reg1]);
+            }
+            else if (opcode == OP_MATH_ACOS && debug_mode) {
+                printf("math.acos %s\n", register_string(reg1));
+                result = acos(registers[reg1]);
+            }
+            else if (opcode == OP_MATH_ATAN && debug_mode) {
+                printf("math.atan %s\n", register_string(reg1));
+                result = atan(registers[reg1]);
+            }
+            else if (opcode == OP_MATH_SQRT && debug_mode) {
+                printf("math.sqrt %s\n", register_string(reg1));
+                if (registers[reg1] >= 0) {
+                    result = sqrt(registers[reg1]);
+                }
+                else {
+                    printf("Math Error: Sqrt of negative!\n");
+                    running = false;
+                    break;
+                }
+            }
+            else if (opcode == OP_MATH_LOG && debug_mode) {
+                printf("math.log %s\n", register_string(reg1));
+                if (registers[reg1] > 0) {
+                    result = log(registers[reg1]);
+                }
+                else {
+                    printf("Math Error: Log of non-positive!\n");
+                    running = false;
+                    break;
+                }
+            }
+            else if (opcode == OP_MATH_EXP && debug_mode) {
+                printf("math.exp %s\n", register_string(reg1));
+                result = exp(registers[reg1]);
+            }
+            else if (opcode == OP_MATH_FLOOR && debug_mode) {
+                printf("math.floor %s\n", register_string(reg1));
+                result = floor(registers[reg1]);
+            }
+            else if (opcode == OP_MATH_CEIL && debug_mode) {
+                printf("math.ceil %s\n", register_string(reg1));
+                result = ceil(registers[reg1]);
+            }
+            else if (opcode == OP_MATH_ROUND && debug_mode) {
+                printf("math.round %s\n", register_string(reg1));
+                result = round(registers[reg1]);
+            }
+            else if (opcode == OP_MATH_NEG && debug_mode) {
+                printf("math.neg %s\n", register_string(reg1));
+                result = -registers[reg1];
+            }
+            else if (opcode == OP_MATH_LOG10 && debug_mode) {
+                printf("math.log10 %s\n", register_string(reg1));
+                if (registers[reg1] > 0) {
+                    result = log10(registers[reg1]);
+                }
+                else {
+                    printf("Math Error: Log10 of non-positive!\n");
+                    running = false;
+                    break;
+                }
+            }
 
             set_carry_flag_float(result, registers[reg1], 0, opcode);
             set_overflow_flag_float(result, registers[reg1], 0, opcode);
@@ -1389,62 +1624,73 @@ void execute_instruction(Opcode opcode) {
     {
         if (opcode == OP_STR_LEN_REG_MEM) {
             reg1 = decode_register(); address = decode_address();
+            if (debug_mode) printf("str.len %s, [%u]\n", register_string(reg1), address);
             if (reg1 != REG_INVALID && address < MEMORY_SIZE) registers[reg1] = (double)strlen((char*)&memory[address]);
         }
         else if (opcode == OP_STR_CPY_MEM_MEM) {
             uint32_t dest_addr = decode_address(); uint32_t src_addr = decode_address();
+            if (debug_mode) printf("str.cpy [%u], [%u]\n", dest_addr, src_addr);
             if (dest_addr < MEMORY_SIZE && src_addr < MEMORY_SIZE) strcpy((char*)&memory[dest_addr], (char*)&memory[src_addr]);
         }
         else if (opcode == OP_STR_CAT_MEM_MEM) {
             uint32_t dest_addr = decode_address(); uint32_t src_addr = decode_address();
+            if (debug_mode) printf("str.cat [%u], [%u]\n", dest_addr, src_addr);
             if (dest_addr < MEMORY_SIZE && src_addr < MEMORY_SIZE) strcat((char*)&memory[dest_addr], (char*)&memory[src_addr]);
         }
         else if (opcode == OP_STR_CMP_REG_MEM_MEM) {
             reg1 = decode_register(); uint32_t addr1 = decode_address(); uint32_t addr2 = decode_address();
+            if (debug_mode) printf("str.cmp %s, [%u], [%u]\n", register_string(reg1), addr1, addr2);
             if (reg1 != REG_INVALID && addr1 < MEMORY_SIZE && addr2 < MEMORY_SIZE) registers[reg1] = (double)strcmp((char*)&memory[addr1], (char*)&memory[addr2]);
             set_zero_flag_float(registers[reg1]);
             set_sign_flag_float(registers[reg1]);
         }
         else if (opcode == OP_STR_NCPY_MEM_MEM_REG) {
             uint32_t dest_addr = decode_address(); uint32_t src_addr = decode_address(); reg1 = decode_register();
+            if (debug_mode) printf("str.ncpy [%u], [%u], %s\n", dest_addr, src_addr, register_string(reg1));
             if (dest_addr < MEMORY_SIZE && src_addr < MEMORY_SIZE && reg1 != REG_INVALID) strncpy((char*)&memory[dest_addr], (char*)&memory[src_addr], (uint32_t)registers[reg1]);
         }
         else if (opcode == OP_STR_NCAT_MEM_MEM_REG) {
             uint32_t dest_addr = decode_address(); uint32_t src_addr = decode_address(); reg1 = decode_register();
+            if (debug_mode) printf("str.ncat [%u], [%u], %s\n", dest_addr, src_addr, register_string(reg1));
             if (dest_addr < MEMORY_SIZE && src_addr < MEMORY_SIZE && reg1 != REG_INVALID) strncat((char*)&memory[dest_addr], (char*)&memory[src_addr], (uint32_t)registers[reg1]);
         }
         else if (opcode == OP_STR_TOUPPER_MEM) {
-            address = decode_address(); if (address < MEMORY_SIZE) { char* str = (char*)&memory[address]; while (*str) { *str = toupper((unsigned char)*str); str++; } }
+            address = decode_address(); if (debug_mode) printf("str.toupper [%u]\n", address); if (address < MEMORY_SIZE) { char* str = (char*)&memory[address]; while (*str) { *str = toupper((unsigned char)*str); str++; } }
         }
         else if (opcode == OP_STR_TOLOWER_MEM) {
-            address = decode_address(); if (address < MEMORY_SIZE) { char* str = (char*)&memory[address]; while (*str) { *str = tolower((unsigned char)*str); str++; } }
+            address = decode_address(); if (debug_mode) printf("str.tolower [%u]\n", address); if (address < MEMORY_SIZE) { char* str = (char*)&memory[address]; while (*str) { *str = tolower((unsigned char)*str); str++; } }
         }
         else if (opcode == OP_STR_CHR_REG_MEM_VAL) {
             reg1 = decode_register(); address = decode_address(); value_uint32 = decode_value_uint32();
+            if (debug_mode) printf("str.chr %s, [%u], %u\n", register_string(reg1), address, value_uint32);
             if (reg1 != REG_INVALID && address < MEMORY_SIZE) { char* res = strchr((char*)&memory[address], (char)value_uint32); registers[reg1] = (double)(res ? res - (char*)&memory[address] : -1); }
             set_zero_flag_float(registers[reg1]);
             set_sign_flag_float(registers[reg1]);
         }
         else if (opcode == OP_STR_STR_REG_MEM_MEM) {
             reg1 = decode_register(); uint32_t addr1 = decode_address(); uint32_t addr2 = decode_address();
+            if (debug_mode) printf("str.str %s, [%u], [%u]\n", register_string(reg1), addr1, addr2);
             if (reg1 != REG_INVALID && addr1 < MEMORY_SIZE && addr2 < MEMORY_SIZE) { char* res = strstr((char*)&memory[addr1], (char*)&memory[addr2]); registers[reg1] = (double)(res ? res - (char*)&memory[addr1] : -1); }
             set_zero_flag_float(registers[reg1]);
             set_sign_flag_float(registers[reg1]);
         }
         else if (opcode == OP_STR_ATOI_REG_MEM) {
             reg1 = decode_register(); address = decode_address();
+            if (debug_mode) printf("str.atoi %s, [%u]\n", register_string(reg1), address);
             if (reg1 != REG_INVALID && address < MEMORY_SIZE) registers[reg1] = (double)atoi((char*)&memory[address]);
             set_zero_flag_float(registers[reg1]);
             set_sign_flag_float(registers[reg1]);
         }
         else if (opcode == OP_STR_ITOA_MEM_REG_REG) {
             address = decode_address(); reg1 = decode_register(); reg2 = decode_register();
+            if (debug_mode) printf("str.itoa [%u], %s, %s\n", address, register_string(reg1), register_string(reg2));
             if (address < MEMORY_SIZE && reg1 != REG_INVALID && reg2 != REG_INVALID) {
                 sprintf((char*)&memory[address], "%d", (int)registers[reg1]);
             }
         }
         else if (opcode == OP_STR_SUBSTR_MEM_MEM_REG_REG) {
             uint32_t dest_addr = decode_address(); uint32_t src_addr = decode_address(); reg1 = decode_register(); reg2 = decode_register();
+            if (debug_mode) printf("str.substr [%u], [%u], %s, %s\n", dest_addr, src_addr, register_string(reg1), register_string(reg2));
             if (dest_addr < MEMORY_SIZE && src_addr < MEMORY_SIZE && reg1 != REG_INVALID && reg2 != REG_INVALID) {
                 char* src = (char*)&memory[src_addr];
                 char* dest = (char*)&memory[dest_addr];
@@ -1468,6 +1714,7 @@ void execute_instruction(Opcode opcode) {
             uint32_t fmt_addr = decode_address();
             reg1 = decode_register();
             reg2 = decode_register();
+            if (debug_mode) printf("str.fmt [%u], [%u], %s, %s\n", dest_addr, fmt_addr, register_string(reg1), register_string(reg2));
             if (dest_addr < MEMORY_SIZE && fmt_addr < MEMORY_SIZE && reg1 != REG_INVALID && reg2 != REG_INVALID) {
                 sprintf((char*)&memory[dest_addr], (char*)&memory[fmt_addr], registers[reg1], registers[reg2]);
             }
@@ -1479,55 +1726,60 @@ void execute_instruction(Opcode opcode) {
     case OP_MEM_CPY_MEM_MEM_REG: case OP_MEM_SET_MEM_REG_VAL: case OP_MEM_FREE_MEM: case OP_MEM_SET_MEM_REG_REG: {
         if (opcode == OP_MEM_CPY_MEM_MEM_REG) {
             uint32_t dest_addr = decode_address(); uint32_t src_addr = decode_address(); reg1 = decode_register();
+            if (debug_mode) printf("mem.cpy [%u], [%u], %s\n", dest_addr, src_addr, register_string(reg1));
             if (dest_addr < MEMORY_SIZE && src_addr < MEMORY_SIZE && reg1 != REG_INVALID) memcpy(&memory[dest_addr], &memory[src_addr], (uint32_t)registers[reg1]);
         }
         else if (opcode == OP_MEM_SET_MEM_REG_VAL) {
             uint32_t dest_addr = decode_address(); reg1 = decode_register(); value_uint32 = decode_value_uint32();
+            if (debug_mode) printf("mem.set [%u], %s, %u\n", dest_addr, register_string(reg1), value_uint32);
             if (dest_addr < MEMORY_SIZE && reg1 != REG_INVALID) memset(&memory[dest_addr], (uint8_t)registers[reg1], value_uint32);
         }
         else if (opcode == OP_MEM_SET_MEM_REG_REG) {
             uint32_t dest_addr = decode_address();
             reg1 = decode_register();
             reg2 = decode_register();
+            if (debug_mode) printf("mem.set [%u], %s, %s\n", dest_addr, register_string(reg1), register_string(reg2));
             if (dest_addr < MEMORY_SIZE && reg1 != REG_INVALID && reg2 != REG_INVALID) {
                 memset(&memory[dest_addr], (uint8_t)registers[reg1], (uint32_t)registers[reg2]);
             }
         }
         else if (opcode == OP_MEM_FREE_MEM) {
             address = decode_address();
+            if (debug_mode) printf("mem.clear [%u]\n", address);
             if (address < MEMORY_SIZE) {
                 uint32_t buffer_size = 0;
                 for (int i = 0; i < buffer_count; i++) { if (buffers[i].address == address) { buffer_size = buffers[i].size; break; } }
                 if (buffer_size > 0) memset(&memory[address], 0, buffer_size);
-                else printf("Warning: mem.clear called on address without known buffer size.\n");
+                else if (debug_mode) printf("Warning: mem.clear called on address without known buffer size.\n");
             }
-            else printf("Error: MEMFREE address out of bounds!\n");
+            else if (debug_mode) printf("Error: MEMFREE address out of bounds!\n");
         }
         break;
     }
 
                                // System Library Opcodes Implementation
-    case OP_SYS_PRINT_CHAR: { reg1 = decode_register(); if (reg1 != REG_INVALID) sys_print_char((char)(uint32_t)registers[reg1]); cursor_x++; break; }
-    case OP_SYS_CLEAR_SCREEN: sys_clear_screen(); break;
-    case OP_SYS_PRINT_STRING: { reg1 = decode_register(); if (reg1 != REG_INVALID) sys_print_string((uint32_t)registers[reg1]); break; }
-    case OP_SYS_PRINT_NEWLINE: sys_print_newline(); break;
-    case OP_SYS_SET_CURSOR_POS: { reg1 = decode_register(); reg2 = decode_register(); if (reg1 != REG_INVALID && reg2 != REG_INVALID) sys_set_cursor_pos((uint32_t)registers[reg1], (uint32_t)registers[reg2]); break; }
-    case OP_SYS_GET_CURSOR_POS: { reg1 = decode_register(); reg2 = decode_register(); uint32_t x_pos, y_pos; sys_get_cursor_pos(&x_pos, &y_pos); if (reg1 != REG_INVALID && reg2 != REG_INVALID) { registers[reg1] = (double)x_pos; registers[reg2] = (double)y_pos; } break; }
-    case OP_SYS_SET_TEXT_COLOR: { reg1 = decode_register(); if (reg1 != REG_INVALID) sys_set_text_color((uint32_t)registers[reg1]); break; }
-    case OP_SYS_RESET_TEXT_COLOR: sys_reset_text_color(); break;
-    case OP_SYS_PRINT_NUMBER_DEC: { reg1 = decode_register(); if (reg1 != REG_INVALID) sys_print_number_dec(registers[reg1]); break; }
-    case OP_SYS_PRINT_NUMBER_HEX: { reg1 = decode_register(); if (reg1 != REG_INVALID) sys_print_number_hex((uint32_t)registers[reg1]); break; }
-    case OP_SYS_NUMBER_TO_STRING: { reg1 = decode_register(); reg2 = decode_register(); reg3 = decode_register(); if (reg1 != REG_INVALID && reg2 != REG_INVALID && reg3 != REG_INVALID) sys_number_to_string((uint32_t)registers[reg1], (uint32_t)registers[reg2], (uint32_t)registers[reg3]); break; }
-    case OP_SYS_READ_CHAR: { reg1 = decode_register(); if (reg1 != REG_INVALID) registers[reg1] = (double)sys_read_char(); break; }
-    case OP_SYS_READ_STRING: { reg1 = decode_register(); reg2 = decode_register(); if (reg1 != REG_INVALID && reg2 != REG_INVALID) sys_read_string((uint32_t)registers[reg1], (uint32_t)registers[reg2]); break; }
-    case OP_SYS_GET_KEY_PRESS: { reg1 = decode_register(); if (reg1 != REG_INVALID) registers[reg1] = (double)sys_get_key_press(); break; }
-    case OP_SYS_GET_CPU_VER: { reg1 = decode_register(); if (reg1 != REG_INVALID) registers[reg1] = sys_get_cpu_ver(); break; }
-    case OP_SYS_WAIT: { reg1 = decode_register(); if (reg1 != REG_INVALID) sys_wait((uint32_t)registers[reg1]); break; }
-    case OP_SYS_TIME_REG: { reg1 = decode_register(); if (reg1 != REG_INVALID) registers[reg1] = sys_time(); break; }
+    case OP_SYS_PRINT_CHAR: { reg1 = decode_register(); if (debug_mode) printf("sys.print_char %s\n", register_string(reg1)); if (reg1 != REG_INVALID) sys_print_char((char)(uint32_t)registers[reg1]); cursor_x++; break; }
+    case OP_SYS_CLEAR_SCREEN: if (debug_mode) printf("sys.clear_screen\n"); sys_clear_screen(); break;
+    case OP_SYS_PRINT_STRING: { reg1 = decode_register(); if (debug_mode) printf("sys.print_string %s\n", register_string(reg1)); if (reg1 != REG_INVALID) sys_print_string((uint32_t)registers[reg1]); break; }
+    case OP_SYS_PRINT_NEWLINE: if (debug_mode) printf("sys.newline\n"); sys_print_newline(); break;
+    case OP_SYS_SET_CURSOR_POS: { reg1 = decode_register(); reg2 = decode_register(); if (debug_mode) printf("sys.set_cursor_pos %s, %s\n", register_string(reg1), register_string(reg2)); if (reg1 != REG_INVALID && reg2 != REG_INVALID) sys_set_cursor_pos((uint32_t)registers[reg1], (uint32_t)registers[reg2]); break; }
+    case OP_SYS_GET_CURSOR_POS: { reg1 = decode_register(); reg2 = decode_register(); if (debug_mode) printf("sys.get_cursor_pos %s, %s\n", register_string(reg1), register_string(reg2)); uint32_t x_pos, y_pos; sys_get_cursor_pos(&x_pos, &y_pos); if (reg1 != REG_INVALID && reg2 != REG_INVALID) { registers[reg1] = (double)x_pos; registers[reg2] = (double)y_pos; } break; }
+    case OP_SYS_SET_TEXT_COLOR: { reg1 = decode_register(); if (debug_mode) printf("sys.set_text_color %s\n", register_string(reg1)); if (reg1 != REG_INVALID) sys_set_text_color((uint32_t)registers[reg1]); break; }
+    case OP_SYS_RESET_TEXT_COLOR: if (debug_mode) printf("sys.reset_text_color\n"); sys_reset_text_color(); break;
+    case OP_SYS_PRINT_NUMBER_DEC: { reg1 = decode_register(); if (debug_mode) printf("sys.print_number_dec %s\n", register_string(reg1)); if (reg1 != REG_INVALID) sys_print_number_dec(registers[reg1]); break; }
+    case OP_SYS_PRINT_NUMBER_HEX: { reg1 = decode_register(); if (debug_mode) printf("sys.print_number_hex %s\n", register_string(reg1)); if (reg1 != REG_INVALID) sys_print_number_hex((uint32_t)registers[reg1]); break; }
+    case OP_SYS_NUMBER_TO_STRING: { reg1 = decode_register(); reg2 = decode_register(); reg3 = decode_register(); if (debug_mode) printf("sys.number_to_string %s, %s, %s\n", register_string(reg1), register_string(reg2), register_string(reg3)); if (reg1 != REG_INVALID && reg2 != REG_INVALID && reg3 != REG_INVALID) sys_number_to_string((uint32_t)registers[reg1], (uint32_t)registers[reg2], (uint32_t)registers[reg3]); break; }
+    case OP_SYS_READ_CHAR: { reg1 = decode_register(); if (debug_mode) printf("sys.read_char %s\n", register_string(reg1)); if (reg1 != REG_INVALID) registers[reg1] = (double)sys_read_char(); break; }
+    case OP_SYS_READ_STRING: { reg1 = decode_register(); reg2 = decode_register(); if (debug_mode) printf("sys.read_string %s, %s\n", register_string(reg1), register_string(reg2)); if (reg1 != REG_INVALID && reg2 != REG_INVALID) sys_read_string((uint32_t)registers[reg1], (uint32_t)registers[reg2]); break; }
+    case OP_SYS_GET_KEY_PRESS: { reg1 = decode_register(); if (debug_mode) printf("sys.get_key_press %s\n", register_string(reg1)); if (reg1 != REG_INVALID) registers[reg1] = (double)sys_get_key_press(); break; }
+    case OP_SYS_GET_CPU_VER: { reg1 = decode_register(); if (debug_mode) printf("sys.cpu_ver %s\n", register_string(reg1)); if (reg1 != REG_INVALID) registers[reg1] = sys_get_cpu_ver(); break; }
+    case OP_SYS_WAIT: { reg1 = decode_register(); if (debug_mode) printf("sys.wait %s\n", register_string(reg1)); if (reg1 != REG_INVALID) sys_wait((uint32_t)registers[reg1]); break; }
+    case OP_SYS_TIME_REG: { reg1 = decode_register(); if (debug_mode) printf("sys.time %s\n", register_string(reg1)); if (reg1 != REG_INVALID) registers[reg1] = sys_time(); break; }
 
                         // Disk Standard Library Implementation
     case OP_DISK_GET_SIZE_REG: {
         reg1 = decode_register();
+        if (debug_mode) printf("disk.get_size %s\n", register_string(reg1));
         uint32_t disk_size;
         DiskResultCode result = disk_get_size(&disk_size);
         if (result == DISK_OK && reg1 != REG_INVALID) {
@@ -1544,6 +1796,7 @@ void execute_instruction(Opcode opcode) {
         reg1 = decode_register();
         reg2 = decode_register();
         address_mem = decode_address();
+        if (debug_mode) printf("disk.read_sector %s, %s, [%u]\n", register_string(reg1), register_string(reg2), address_mem);
 
         if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
             DiskResultCode result = disk_read_sector((uint32_t)registers[reg1], address_mem, (uint32_t)registers[reg2]);
@@ -1558,6 +1811,7 @@ void execute_instruction(Opcode opcode) {
         reg1 = decode_register();
         reg2 = decode_register();
         address_mem = decode_address();
+        if (debug_mode) printf("disk.write_sector %s, %s, [%u]\n", register_string(reg1), register_string(reg2), address_mem);
 
         if (reg1 != REG_INVALID && reg2 != REG_INVALID) {
             DiskResultCode result = disk_write_sector((uint32_t)registers[reg1], address_mem, (uint32_t)registers[reg2]);
@@ -1568,6 +1822,7 @@ void execute_instruction(Opcode opcode) {
         break;
     }
     case OP_DISK_CREATE_IMAGE: {
+        if (debug_mode) printf("disk.create_image\n");
         DiskResultCode result = create_disk_image();
         if (result != DISK_OK) {
             printf("DISK Error: Create Image failed with code %d\n", result);
@@ -1576,6 +1831,7 @@ void execute_instruction(Opcode opcode) {
     }
     case OP_DISK_GET_VOLUME_LABEL_MEM: {
         address = decode_address();
+        if (debug_mode) printf("disk.get_volume_label [%u]\n", address);
         DiskResultCode result = disk_get_volume_label(address);
         if (result != DISK_OK) {
             printf("DISK Error: Get Volume Label failed with code %d\n", result);
@@ -1584,6 +1840,7 @@ void execute_instruction(Opcode opcode) {
     }
     case OP_DISK_SET_VOLUME_LABEL_MEM: {
         address = decode_address();
+        if (debug_mode) printf("disk.set_volume_label [%u]\n", address);
         DiskResultCode result = disk_set_volume_label(address);
         if (result != DISK_OK) {
             printf("DISK Error: Set Volume Label failed with code %d\n", result);
@@ -1693,6 +1950,10 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, ch
     if (strcmp(op_str, "BSWAP") == 0) { if (operand1 && is_register_str(operand1)) return OP_BSWAP_REG; }
     if (strcmp(op_str, "SETZ") == 0) { if (operand1 && is_register_str(operand1)) return OP_SETZ_REG; }
     if (strcmp(op_str, "SETNZ") == 0) { if (operand1 && is_register_str(operand1)) return OP_SETNZ_REG; }
+    if (strcmp(op_str, "PUSHA") == 0) return OP_PUSHA;
+    if (strcmp(op_str, "POPA") == 0) return OP_POPA;
+    if (strcmp(op_str, "PUSHFD") == 0) return OP_PUSHFD;
+    if (strcmp(op_str, "POPFD") == 0) return OP_POPFD;
 
 
     if (strncmp(op_str, "math.", 5) == 0) {
@@ -1801,6 +2062,7 @@ RegisterIndex register_from_string(const char* reg_str) {
     }
     return REG_INVALID;
 }
+
 
 const char* get_macro_value(const char* macro_name) {
     for (int i = 0; i < macro_count; i++) {
@@ -2352,6 +2614,10 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_STR_ATOI_REG_MEM:
         case OP_DISK_GET_VOLUME_LABEL_MEM:
         case OP_DISK_SET_VOLUME_LABEL_MEM:
+        case OP_PUSHA:
+        case OP_POPA:
+        case OP_PUSHFD:
+        case OP_POPFD:
             instruction_bytes += 5; break;
         case OP_NOT_REG:
         case OP_NEG_REG:
@@ -2675,13 +2941,17 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_MEM_FREE_MEM:
         case OP_STR_TOUPPER_MEM:
         case OP_STR_TOLOWER_MEM:
+        case OP_PUSHA:
+        case OP_POPA:
+        case OP_PUSHFD:
+        case OP_POPFD:
         case OP_DISK_GET_VOLUME_LABEL_MEM:
         case OP_DISK_SET_VOLUME_LABEL_MEM:
         {
             RegisterIndex reg = REG_INVALID;
-            if (opcode != OP_INC_MEM && opcode != OP_DEC_MEM && opcode != OP_MEM_FREE_MEM && opcode != OP_STR_TOUPPER_MEM && opcode != OP_STR_TOLOWER_MEM && opcode != OP_DISK_GET_VOLUME_LABEL_MEM && opcode != OP_DISK_SET_VOLUME_LABEL_MEM)
+            if (opcode != OP_INC_MEM && opcode != OP_DEC_MEM && opcode != OP_MEM_FREE_MEM && opcode != OP_STR_TOUPPER_MEM && opcode != OP_STR_TOLOWER_MEM && opcode != OP_PUSHA && opcode != OP_POPA && opcode != OP_PUSHFD && opcode != OP_POPFD && opcode != OP_DISK_GET_VOLUME_LABEL_MEM && opcode != OP_DISK_SET_VOLUME_LABEL_MEM)
                 reg = register_from_string(reg1_str);
-            uint32_t address = parse_address((opcode == OP_INC_MEM || opcode == OP_DEC_MEM || opcode == OP_MEM_FREE_MEM || opcode == OP_STR_TOUPPER_MEM || opcode == OP_STR_TOLOWER_MEM || opcode == OP_DISK_GET_VOLUME_LABEL_MEM || opcode == OP_DISK_SET_VOLUME_LABEL_MEM) ? reg1_str : reg2_str);
+            uint32_t address = parse_address((opcode == OP_INC_MEM || opcode == OP_DEC_MEM || opcode == OP_MEM_FREE_MEM || opcode == OP_STR_TOUPPER_MEM || opcode == OP_STR_TOLOWER_MEM || opcode == OP_PUSHA || opcode == OP_POPA || opcode == OP_PUSHFD || opcode == OP_POPFD || opcode == OP_DISK_GET_VOLUME_LABEL_MEM || opcode == OP_DISK_SET_VOLUME_LABEL_MEM) ? reg1_str : reg2_str);
             if (reg != REG_INVALID) memory[program_counter++] = (uint8_t)reg;
             *(uint32_t*)&memory[program_counter] = address;
             program_counter += 4;
@@ -3074,6 +3344,8 @@ int load_rom(const char* rom_filename) {
     return 0;
 }
 
+bool debug_mode = false;
+
 int main(int argc, char* argv[]) {
     char choice;
     char filename[256];
@@ -3090,7 +3362,8 @@ int main(int argc, char* argv[]) {
         printf("1. Assemble .asm to .rom and .lst\n");
         printf("2. Run .rom\n");
         printf("3. Exit\n");
-        printf("Enter choice (1-3): ");
+        printf("4. Toggle Debug Mode (%s)\n", debug_mode ? "ON" : "OFF");
+        printf("Enter choice (1-4: ");
         scanf(" %c", &choice);
 
         switch (choice) {
@@ -3117,8 +3390,12 @@ int main(int argc, char* argv[]) {
         case '3':
             printf("Exiting.\n");
             return 0;
+        case '4':
+            debug_mode = !debug_mode;
+            printf("Debug Mode is now %s\n", debug_mode ? "ON" : "OFF");
+            break;
         default:
-            printf("Invalid choice. Please enter 1, 2, or 3.\n");
+            printf("Invalid choice. Please enter 1, 2, 3 or 4.\n");
         }
     }
 
