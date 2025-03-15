@@ -28,10 +28,6 @@
 #define GPU_VER 1
 #define MAX_PREPROCESSOR_DEPTH 10
 
-#define CLOCK_SPEED_MHZ 4.77
-#define TARGET_INSTRUCTIONS_PER_SECOND 100000
-#define DELAY_DURATION_US (1000000 / TARGET_INSTRUCTIONS_PER_SECOND)
-
 #define SCREEN_WIDTH  128  
 #define SCREEN_HEIGHT 128 
 
@@ -126,6 +122,7 @@ typedef enum {
     OP_SYS_SET_CURSOR_POS, OP_SYS_GET_CURSOR_POS, OP_SYS_SET_TEXT_COLOR, OP_SYS_RESET_TEXT_COLOR,
     OP_SYS_PRINT_NUMBER_DEC, OP_SYS_PRINT_NUMBER_HEX, OP_SYS_NUMBER_TO_STRING, OP_SYS_READ_CHAR,
     OP_SYS_READ_STRING, OP_SYS_GET_KEY_PRESS, OP_SYS_GET_CPU_VER, OP_SYS_WAIT, OP_SYS_TIME_REG,
+    OP_MEM_TEST,
 
     // Disk Standard Library
     OP_DISK_GET_SIZE_REG,
@@ -221,6 +218,7 @@ uint32_t palette[32] = {
 };
 
 uint8_t memory[MEMORY_SIZE];
+uint8_t backup_memory[MEMORY_SIZE];
 double registers[NUM_TOTAL_REGISTERS];
 uint32_t program_counter = 0;
 bool running = true;
@@ -248,6 +246,7 @@ SDL_Renderer* gfx_renderer = NULL;
 SDL_Texture* gfx_texture = NULL;     
 uint32_t* gfx_pixels = NULL;       //Pixel buffer in memory
 bool          gfx_initialized = false; //Flag to track gfx init
+bool needs_gfx_update = false;
 
 #ifndef _WIN32
 struct termios original_termios;
@@ -2032,7 +2031,29 @@ void execute_instruction(Opcode opcode) {
     case OP_SYS_GET_CPU_VER: { reg1 = decode_register(); if (debug_mode) printf("sys.cpu_ver %s\n", register_string(reg1)); if (reg1 != REG_INVALID) registers[reg1] = sys_get_cpu_ver(); break; }
     case OP_SYS_WAIT: { reg1 = decode_register(); if (debug_mode) printf("sys.wait %s\n", register_string(reg1)); if (reg1 != REG_INVALID) sys_wait((uint32_t)registers[reg1]); break; }
     case OP_SYS_TIME_REG: { reg1 = decode_register(); if (debug_mode) printf("sys.time %s\n", register_string(reg1)); if (reg1 != REG_INVALID) registers[reg1] = sys_time(); break; }
+    case OP_MEM_TEST: {
+        if (debug_mode) printf("MEM_TEST\n");
+        memcpy(backup_memory, memory, MEMORY_SIZE);
+        memset(memory, 0x00, MEMORY_SIZE);
 
+        bool test_failed = false;
+        for (uint32_t i = 0; i < MEMORY_SIZE; ++i) {
+            if (memory[i] != 0x00) {
+                printf("Error at address 0x%08X: Expected 0x00, but got 0x%02X\n", i, memory[i]);
+                test_failed = true;
+            }
+        }
+
+        memcpy(memory, backup_memory, MEMORY_SIZE);
+
+        if (test_failed) {
+            registers[REG_R0] = 1.0; // Indicate failure
+        }
+        else {
+            registers[REG_R0] = 0.0; // Indicate success
+        }
+        break;
+    }
                         // Disk Standard Library Implementation
     case OP_DISK_GET_SIZE_REG: {
         reg1 = decode_register();
@@ -2121,29 +2142,33 @@ void execute_instruction(Opcode opcode) {
                 running = false;
             }
         }
+        needs_gfx_update = true; 
         break;
 
     case OP_GFX_CLOSE:
         if (debug_mode) printf("gfx.close\n");
         gfx_close();
+        needs_gfx_update = true;
         break;
 
     case OP_GFX_DRAW_PIXEL: {
         reg1 = decode_register(); // X
         reg2 = decode_register(); // Y
-        reg3 = decode_register(); // Color (ARGB8888 as a double/uint32_t in register)
+        reg3 = decode_register(); // Color
         if (debug_mode) printf("gfx.pixel %s, %s, %s\n", register_string(reg1), register_string(reg2), register_string(reg3));
         if (reg1 != REG_INVALID && reg2 != REG_INVALID && reg3 != REG_INVALID) {
             gfx_draw_pixel((int)registers[reg1], (int)registers[reg2], (uint32_t)registers[reg3]);
         }
+        needs_gfx_update = true; 
         break;
     }
-    case OP_GFX_CLEAR: { 
+    case OP_GFX_CLEAR: {
         reg1 = decode_register(); // Color register
         if (debug_mode) printf("gfx.clear %s\n", register_string(reg1));
         if (reg1 != REG_INVALID) {
             gfx_clear_screen((uint32_t)registers[reg1]);
         }
+        needs_gfx_update = true;
         break;
     }
     case OP_GFX_GET_SCREEN_WIDTH_REG: {
@@ -2184,21 +2209,30 @@ void run_vm() {
     sys_reset_text_color();
     sys_clear_screen();
     srand(time(NULL));
+    needs_gfx_update = false;
+
+    uint64_t instruction_count = 0;
+    clock_t start_time = clock();
 
     while (running) {
         Opcode opcode = decode_opcode();
         execute_instruction(opcode);
-        gfx_update_screen();
-
-#ifndef _WIN32
-        usleep(DELAY_DURATION_US);
-#else
-        Sleep(DELAY_DURATION_US / 1000);
-#endif
+        if (needs_gfx_update) {
+            gfx_update_screen();
+            needs_gfx_update = false; 
+        }
 
         if (!running) break;
+        instruction_count++;
     }
     sys_reset_text_color();
+
+    clock_t end_time = clock();
+    double cpu_time_used = ((double)(end_time - start_time)) / CLOCKS_PER_SEC;
+
+    printf("\n--- Execution Summary ---\n");
+    printf("Total Instructions Executed: %llu\n", instruction_count);
+    printf("Execution Time: %.6f seconds\n", cpu_time_used);
 }
 
 // Assembler Functions
@@ -2211,9 +2245,27 @@ bool is_memory_address_str(const char* str) {
     return (str[0] == '[' && str[strlen(str) - 1] == ']');
 }
 
+int strcasecmp_portable(const char* s1, const char* s2) {
+    if (!s1 || !s2) {
+        if (s1 == s2) return 0; // Both NULL are equal
+        return (s1 == NULL) ? -1 : 1; // NULL is less than non-NULL
+    }
+
+    while (*s1 != '\0' && *s2 != '\0') {
+        int diff = tolower((unsigned char)*s1) - tolower((unsigned char)*s2);
+        if (diff != 0) {
+            return diff;
+        }
+        s1++;
+        s2++;
+    }
+
+    return tolower((unsigned char)*s1) - tolower((unsigned char)*s2);
+}
+
 Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, char* operand3, char* operand4) {
-    if (_stricmp(op_str, "NOP") == 0) return OP_NOP;
-    if (_stricmp(op_str, "MOV") == 0) {
+    if (strcasecmp_portable(op_str, "NOP") == 0) return OP_NOP;
+    if (strcasecmp_portable(op_str, "MOV") == 0) {
         if (operand1 && operand2) {
             if (is_register_str(operand1)) {
                 if (is_register_str(operand2)) return OP_MOV_REG_REG;
@@ -2226,166 +2278,166 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, ch
             }
         }
     }
-    if (_stricmp(op_str, "ADD") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_ADD_REG_REG; else return OP_ADD_REG_VAL; } }
-    if (_stricmp(op_str, "SUB") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_SUB_REG_REG; else return OP_SUB_REG_VAL; } }
-    if (_stricmp(op_str, "MUL") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_MUL_REG_REG; else return OP_MUL_REG_VAL; } }
-    if (_stricmp(op_str, "DIV") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_DIV_REG_REG; else return OP_DIV_REG_VAL; } }
-    if (_stricmp(op_str, "MOD") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_MOD_REG_REG; else return OP_MOD_REG_VAL; } }
-    if (_stricmp(op_str, "AND") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_AND_REG_REG; else return OP_AND_REG_VAL; } }
-    if (_stricmp(op_str, "OR") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_OR_REG_REG; else return OP_OR_REG_VAL; } }
-    if (_stricmp(op_str, "XOR") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_XOR_REG_REG; else return OP_XOR_REG_VAL; } }
-    if (_stricmp(op_str, "NOT") == 0) { if (operand1 && is_register_str(operand1)) return OP_NOT_REG; }
-    if (_stricmp(op_str, "NEG") == 0) { if (operand1 && is_register_str(operand1)) return OP_NEG_REG; }
-    if (_stricmp(op_str, "CMP") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_CMP_REG_REG; else return OP_CMP_REG_VAL; } }
-    if (_stricmp(op_str, "TEST") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_TEST_REG_REG; else return OP_TEST_REG_VAL; } }
-    if (_stricmp(op_str, "IMUL") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_IMUL_REG_REG; }
-    if (_stricmp(op_str, "IDIV") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_IDIV_REG_REG; }
-    if (_stricmp(op_str, "MOVZX") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_MOVZX_REG_REG; else if (is_memory_address_str(operand2)) return OP_MOVZX_REG_MEM; } }
-    if (_stricmp(op_str, "MOVSX") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_MOVSX_REG_REG; else if (is_memory_address_str(operand2)) return OP_MOVSX_REG_MEM; } }
-    if (_stricmp(op_str, "LEA") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_memory_address_str(operand2) || get_label_address(operand2) != -1) return OP_LEA_REG_MEM; } }
-    if (_stricmp(op_str, "JMP") == 0) { if (operand1) return OP_JMP; }
-    if (_stricmp(op_str, "JNZ") == 0 || _stricmp(op_str, "JMP_NZ") == 0) { if (operand1) return OP_JMP_NZ; }
-    if (_stricmp(op_str, "JZ") == 0 || _stricmp(op_str, "JMP_Z") == 0) { if (operand1) return OP_JMP_Z; }
-    if (_stricmp(op_str, "JS") == 0 || _stricmp(op_str, "JMP_S") == 0) { if (operand1) return OP_JMP_S; }
-    if (_stricmp(op_str, "JNS") == 0 || _stricmp(op_str, "JMP_NS") == 0) { if (operand1) return OP_JMP_NS; }
-    if (_stricmp(op_str, "JC") == 0 || _stricmp(op_str, "JMP_C") == 0) { if (operand1) return OP_JMP_C; }
-    if (_stricmp(op_str, "JNC") == 0 || _stricmp(op_str, "JMP_NC") == 0) { if (operand1) return OP_JMP_NC; }
-    if (_stricmp(op_str, "JO") == 0 || _stricmp(op_str, "JMP_O") == 0) { if (operand1) return OP_JMP_O; }
-    if (_stricmp(op_str, "JNO") == 0 || _stricmp(op_str, "JMP_NO") == 0) { if (operand1) return OP_JMP_NO; }
-    if (_stricmp(op_str, "JGE") == 0 || _stricmp(op_str, "JMP_GE") == 0) { if (operand1) return OP_JMP_GE; }
-    if (_stricmp(op_str, "JLE") == 0 || _stricmp(op_str, "JMP_LE") == 0) { if (operand1) return OP_JMP_LE; }
-    if (_stricmp(op_str, "JG") == 0 || _stricmp(op_str, "JMP_G") == 0) { if (operand1) return OP_JMP_G; }
-    if (_stricmp(op_str, "JL") == 0 || _stricmp(op_str, "JMP_L") == 0) { if (operand1) return OP_JMP_L; }
-    if (_stricmp(op_str, "HLT") == 0) return OP_HLT;
-    if (_stricmp(op_str, "INC") == 0) { if (operand1 && is_register_str(operand1)) return OP_INC_REG; else if (is_memory_address_str(operand1)) return OP_INC_MEM; }
-    if (_stricmp(op_str, "DEC") == 0) { if (operand1 && is_register_str(operand1)) return OP_DEC_REG; else if (is_memory_address_str(operand1)) return OP_DEC_MEM; }
-    if (_stricmp(op_str, "SHL") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_SHL_REG_REG; else return OP_SHL_REG_VAL; } }
-    if (_stricmp(op_str, "SHR") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_SHR_REG_REG; else return OP_SHR_REG_VAL; } }
-    if (_stricmp(op_str, "SAR") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_SAR_REG_REG; else return OP_SAR_REG_VAL; } }
-    if (_stricmp(op_str, "ROL") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_ROL_REG_REG; else return OP_ROL_REG_VAL; } }
-    if (_stricmp(op_str, "ROR") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_ROR_REG_REG; else return OP_ROR_REG_VAL; } }
-    if (_stricmp(op_str, "RND") == 0) { if (operand1 && is_register_str(operand1)) return OP_RND_REG; }
-    if (_stricmp(op_str, "PUSH") == 0) { if (operand1 && is_register_str(operand1)) return OP_PUSH_REG; }
-    if (_stricmp(op_str, "POP") == 0) { if (operand1 && is_register_str(operand1)) return OP_POP_REG; }
-    if (_stricmp(op_str, "CALL") == 0) { if (operand1) return OP_CALL_ADDR; }
-    if (_stricmp(op_str, "RET") == 0) return OP_RET;
-    if (_stricmp(op_str, "XCHG") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_XCHG_REG_REG; }
-    if (_stricmp(op_str, "BSWAP") == 0) { if (operand1 && is_register_str(operand1)) return OP_BSWAP_REG; }
-    if (_stricmp(op_str, "SETZ") == 0) { if (operand1 && is_register_str(operand1)) return OP_SETZ_REG; }
-    if (_stricmp(op_str, "SETNZ") == 0) { if (operand1 && is_register_str(operand1)) return OP_SETNZ_REG; }
-    if (_stricmp(op_str, "PUSHA") == 0) return OP_PUSHA;
-    if (_stricmp(op_str, "POPA") == 0) return OP_POPA;
-    if (_stricmp(op_str, "PUSHFD") == 0) return OP_PUSHFD;
-    if (_stricmp(op_str, "POPFD") == 0) return OP_POPFD;
-
+    if (strcasecmp_portable(op_str, "ADD") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_ADD_REG_REG; else return OP_ADD_REG_VAL; } }
+    if (strcasecmp_portable(op_str, "SUB") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_SUB_REG_REG; else return OP_SUB_REG_VAL; } }
+    if (strcasecmp_portable(op_str, "MUL") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_MUL_REG_REG; else return OP_MUL_REG_VAL; } }
+    if (strcasecmp_portable(op_str, "DIV") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_DIV_REG_REG; else return OP_DIV_REG_VAL; } }
+    if (strcasecmp_portable(op_str, "MOD") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_MOD_REG_REG; else return OP_MOD_REG_VAL; } }
+    if (strcasecmp_portable(op_str, "AND") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_AND_REG_REG; else return OP_AND_REG_VAL; } }
+    if (strcasecmp_portable(op_str, "OR") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_OR_REG_REG; else return OP_OR_REG_VAL; } }
+    if (strcasecmp_portable(op_str, "XOR") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_XOR_REG_REG; else return OP_XOR_REG_VAL; } }
+    if (strcasecmp_portable(op_str, "NOT") == 0) { if (operand1 && is_register_str(operand1)) return OP_NOT_REG; }
+    if (strcasecmp_portable(op_str, "NEG") == 0) { if (operand1 && is_register_str(operand1)) return OP_NEG_REG; }
+    if (strcasecmp_portable(op_str, "CMP") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_CMP_REG_REG; else return OP_CMP_REG_VAL; } }
+    if (strcasecmp_portable(op_str, "TEST") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_TEST_REG_REG; else return OP_TEST_REG_VAL; } }
+    if (strcasecmp_portable(op_str, "IMUL") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_IMUL_REG_REG; }
+    if (strcasecmp_portable(op_str, "IDIV") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_IDIV_REG_REG; }
+    if (strcasecmp_portable(op_str, "MOVZX") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_MOVZX_REG_REG; else if (is_memory_address_str(operand2)) return OP_MOVZX_REG_MEM; } }
+    if (strcasecmp_portable(op_str, "MOVSX") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_MOVSX_REG_REG; else if (is_memory_address_str(operand2)) return OP_MOVSX_REG_MEM; } }
+    if (strcasecmp_portable(op_str, "LEA") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_memory_address_str(operand2) || get_label_address(operand2) != -1) return OP_LEA_REG_MEM; } }
+    if (strcasecmp_portable(op_str, "JMP") == 0) { if (operand1) return OP_JMP; }
+    if (strcasecmp_portable(op_str, "JNZ") == 0 || strcasecmp_portable(op_str, "JMP_NZ") == 0) { if (operand1) return OP_JMP_NZ; }
+    if (strcasecmp_portable(op_str, "JZ") == 0 || strcasecmp_portable(op_str, "JMP_Z") == 0) { if (operand1) return OP_JMP_Z; }
+    if (strcasecmp_portable(op_str, "JS") == 0 || strcasecmp_portable(op_str, "JMP_S") == 0) { if (operand1) return OP_JMP_S; }
+    if (strcasecmp_portable(op_str, "JNS") == 0 || strcasecmp_portable(op_str, "JMP_NS") == 0) { if (operand1) return OP_JMP_NS; }
+    if (strcasecmp_portable(op_str, "JC") == 0 || strcasecmp_portable(op_str, "JMP_C") == 0) { if (operand1) return OP_JMP_C; }
+    if (strcasecmp_portable(op_str, "JNC") == 0 || strcasecmp_portable(op_str, "JMP_NC") == 0) { if (operand1) return OP_JMP_NC; }
+    if (strcasecmp_portable(op_str, "JO") == 0 || strcasecmp_portable(op_str, "JMP_O") == 0) { if (operand1) return OP_JMP_O; }
+    if (strcasecmp_portable(op_str, "JNO") == 0 || strcasecmp_portable(op_str, "JMP_NO") == 0) { if (operand1) return OP_JMP_NO; }
+    if (strcasecmp_portable(op_str, "JGE") == 0 || strcasecmp_portable(op_str, "JMP_GE") == 0) { if (operand1) return OP_JMP_GE; }
+    if (strcasecmp_portable(op_str, "JLE") == 0 || strcasecmp_portable(op_str, "JMP_LE") == 0) { if (operand1) return OP_JMP_LE; }
+    if (strcasecmp_portable(op_str, "JG") == 0 || strcasecmp_portable(op_str, "JMP_G") == 0) { if (operand1) return OP_JMP_G; }
+    if (strcasecmp_portable(op_str, "JL") == 0 || strcasecmp_portable(op_str, "JMP_L") == 0) { if (operand1) return OP_JMP_L; }
+    if (strcasecmp_portable(op_str, "HLT") == 0) return OP_HLT;
+    if (strcasecmp_portable(op_str, "INC") == 0) { if (operand1 && is_register_str(operand1)) return OP_INC_REG; else if (is_memory_address_str(operand1)) return OP_INC_MEM; }
+    if (strcasecmp_portable(op_str, "DEC") == 0) { if (operand1 && is_register_str(operand1)) return OP_DEC_REG; else if (is_memory_address_str(operand1)) return OP_DEC_MEM; }
+    if (strcasecmp_portable(op_str, "SHL") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_SHL_REG_REG; else return OP_SHL_REG_VAL; } }
+    if (strcasecmp_portable(op_str, "SHR") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_SHR_REG_REG; else return OP_SHR_REG_VAL; } }
+    if (strcasecmp_portable(op_str, "SAR") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_SAR_REG_REG; else return OP_SAR_REG_VAL; } }
+    if (strcasecmp_portable(op_str, "ROL") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_ROL_REG_REG; else return OP_ROL_REG_VAL; } }
+    if (strcasecmp_portable(op_str, "ROR") == 0) { if (operand1 && operand2 && is_register_str(operand1)) { if (is_register_str(operand2)) return OP_ROR_REG_REG; else return OP_ROR_REG_VAL; } }
+    if (strcasecmp_portable(op_str, "RND") == 0) { if (operand1 && is_register_str(operand1)) return OP_RND_REG; }
+    if (strcasecmp_portable(op_str, "PUSH") == 0) { if (operand1 && is_register_str(operand1)) return OP_PUSH_REG; }
+    if (strcasecmp_portable(op_str, "POP") == 0) { if (operand1 && is_register_str(operand1)) return OP_POP_REG; }
+    if (strcasecmp_portable(op_str, "CALL") == 0) { if (operand1) return OP_CALL_ADDR; }
+    if (strcasecmp_portable(op_str, "RET") == 0) return OP_RET;
+    if (strcasecmp_portable(op_str, "XCHG") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_XCHG_REG_REG; }
+    if (strcasecmp_portable(op_str, "BSWAP") == 0) { if (operand1 && is_register_str(operand1)) return OP_BSWAP_REG; }
+    if (strcasecmp_portable(op_str, "SETZ") == 0) { if (operand1 && is_register_str(operand1)) return OP_SETZ_REG; }
+    if (strcasecmp_portable(op_str, "SETNZ") == 0) { if (operand1 && is_register_str(operand1)) return OP_SETNZ_REG; }
+    if (strcasecmp_portable(op_str, "PUSHA") == 0) return OP_PUSHA;
+    if (strcasecmp_portable(op_str, "POPA") == 0) return OP_POPA;
+    if (strcasecmp_portable(op_str, "PUSHFD") == 0) return OP_PUSHFD;
+    if (strcasecmp_portable(op_str, "POPFD") == 0) return OP_POPFD;
+    if (strcasecmp_portable(op_str, "MEM_TEST") == 0 || strcasecmp_portable(op_str, "MEMTEST") == 0) return OP_MEM_TEST;
 
     if (strncmp(op_str, "math.", 5) == 0) {
         char* math_func = op_str + 5;
-        if (_stricmp(math_func, "add") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_ADD; }
-        else if (_stricmp(math_func, "sub") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_SUB; }
-        else if (_stricmp(math_func, "mul") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_MUL; }
-        else if (_stricmp(math_func, "div") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_DIV; }
-        else if (_stricmp(math_func, "mod") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_MOD; }
-        else if (_stricmp(math_func, "abs") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_ABS; }
-        else if (_stricmp(math_func, "sin") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_SIN; }
-        else if (_stricmp(math_func, "cos") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_COS; }
-        else if (_stricmp(math_func, "tan") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_TAN; }
-        else if (_stricmp(math_func, "asin") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_ASIN; }
-        else if (_stricmp(math_func, "acos") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_ACOS; }
-        else if (_stricmp(math_func, "atan") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_ATAN; }
-        else if (_stricmp(math_func, "pow") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_POW; }
-        else if (_stricmp(math_func, "sqrt") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_SQRT; }
-        else if (_stricmp(math_func, "log") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_LOG; }
-        else if (_stricmp(math_func, "exp") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_EXP; }
-        else if (_stricmp(math_func, "floor") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_FLOOR; }
-        else if (_stricmp(math_func, "ceil") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_CEIL; }
-        else if (_stricmp(math_func, "round") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_ROUND; }
-        else if (_stricmp(math_func, "min") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_MIN; }
-        else if (_stricmp(math_func, "max") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_MAX; }
-        else if (_stricmp(math_func, "neg") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_NEG; }
-        else if (_stricmp(math_func, "atan2") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_ATAN2; }
-        else if (_stricmp(math_func, "log10") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_LOG10; }
-        else if (_stricmp(math_func, "clamp") == 0) { if (operand1 && operand2 && operand3 && is_register_str(operand1) && is_register_str(operand2) && is_register_str(operand3)) return OP_MATH_CLAMP; }
-        else if (_stricmp(math_func, "lerp") == 0) { if (operand1 && operand2 && operand3 && operand4 && is_register_str(operand1) && is_register_str(operand2) && is_register_str(operand3) && is_register_str(operand4)) return OP_MATH_LERP; }
+        if (strcasecmp_portable(math_func, "add") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_ADD; }
+        else if (strcasecmp_portable(math_func, "sub") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_SUB; }
+        else if (strcasecmp_portable(math_func, "mul") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_MUL; }
+        else if (strcasecmp_portable(math_func, "div") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_DIV; }
+        else if (strcasecmp_portable(math_func, "mod") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_MOD; }
+        else if (strcasecmp_portable(math_func, "abs") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_ABS; }
+        else if (strcasecmp_portable(math_func, "sin") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_SIN; }
+        else if (strcasecmp_portable(math_func, "cos") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_COS; }
+        else if (strcasecmp_portable(math_func, "tan") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_TAN; }
+        else if (strcasecmp_portable(math_func, "asin") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_ASIN; }
+        else if (strcasecmp_portable(math_func, "acos") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_ACOS; }
+        else if (strcasecmp_portable(math_func, "atan") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_ATAN; }
+        else if (strcasecmp_portable(math_func, "pow") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_POW; }
+        else if (strcasecmp_portable(math_func, "sqrt") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_SQRT; }
+        else if (strcasecmp_portable(math_func, "log") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_LOG; }
+        else if (strcasecmp_portable(math_func, "exp") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_EXP; }
+        else if (strcasecmp_portable(math_func, "floor") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_FLOOR; }
+        else if (strcasecmp_portable(math_func, "ceil") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_CEIL; }
+        else if (strcasecmp_portable(math_func, "round") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_ROUND; }
+        else if (strcasecmp_portable(math_func, "min") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_MIN; }
+        else if (strcasecmp_portable(math_func, "max") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_MAX; }
+        else if (strcasecmp_portable(math_func, "neg") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_NEG; }
+        else if (strcasecmp_portable(math_func, "atan2") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_MATH_ATAN2; }
+        else if (strcasecmp_portable(math_func, "log10") == 0) { if (operand1 && is_register_str(operand1)) return OP_MATH_LOG10; }
+        else if (strcasecmp_portable(math_func, "clamp") == 0) { if (operand1 && operand2 && operand3 && is_register_str(operand1) && is_register_str(operand2) && is_register_str(operand3)) return OP_MATH_CLAMP; }
+        else if (strcasecmp_portable(math_func, "lerp") == 0) { if (operand1 && operand2 && operand3 && operand4 && is_register_str(operand1) && is_register_str(operand2) && is_register_str(operand3) && is_register_str(operand4)) return OP_MATH_LERP; }
     }
     else if (strncmp(op_str, "str.", 4) == 0) {
         char* str_func = op_str + 4;
-        if (_stricmp(str_func, "len") == 0) { if (operand1 && operand2 && is_register_str(operand1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1)) return OP_STR_LEN_REG_MEM; }
-        else if (_stricmp(str_func, "cpy") == 0) { if (operand1 && operand2 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1)) return OP_STR_CPY_MEM_MEM; }
-        else if (_stricmp(str_func, "cat") == 0) { if (operand1 && operand2 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1)) return OP_STR_CAT_MEM_MEM; }
-        else if (_stricmp(str_func, "cmp") == 0) { if (operand1 && operand2 && operand3 && is_register_str(operand1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && (is_memory_address_str(operand3) || get_label_address(operand3) != -1)) return OP_STR_CMP_REG_MEM_MEM; }
-        else if (_stricmp(str_func, "ncpy") == 0) { if (operand1 && operand2 && operand3 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && is_register_str(operand3)) return OP_STR_NCPY_MEM_MEM_REG; }
-        else if (_stricmp(str_func, "ncat") == 0) { if (operand1 && operand2 && operand3 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && is_register_str(operand3)) return OP_STR_NCAT_MEM_MEM_REG; }
-        else if (_stricmp(str_func, "toupper") == 0) { if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1)) return OP_STR_TOUPPER_MEM; }
-        else if (_stricmp(str_func, "tolower") == 0) { if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1)) return OP_STR_TOLOWER_MEM; }
-        else if (_stricmp(str_func, "chr") == 0) { if (operand1 && operand2 && operand3 && is_register_str(operand1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && !is_register_str(operand3) && !is_memory_address_str(operand3)) return OP_STR_CHR_REG_MEM_VAL; }
-        else if (_stricmp(str_func, "str") == 0) { if (operand1 && operand2 && operand3 && is_register_str(operand1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && (is_memory_address_str(operand3) || get_label_address(operand3) != -1)) return OP_STR_STR_REG_MEM_MEM; }
-        else if (_stricmp(str_func, "atoi") == 0) { if (operand1 && operand2 && is_register_str(operand1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1)) return OP_STR_ATOI_REG_MEM; }
-        else if (_stricmp(str_func, "itoa") == 0) { if (operand1 && operand2 && operand3 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && is_register_str(operand2) && is_register_str(operand3)) return OP_STR_ITOA_MEM_REG_REG; }
-        else if (_stricmp(str_func, "substr") == 0) { if (operand1 && operand2 && operand3 && operand4 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && is_register_str(operand3) && is_register_str(operand4)) return OP_STR_SUBSTR_MEM_MEM_REG_REG; }
-        else if (_stricmp(str_func, "fmt") == 0) { if (operand1 && operand2 && operand3 && operand4 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && is_register_str(operand3) && is_register_str(operand4)) return OP_STR_FMT_MEM_MEM_REG_REG; }
+        if (strcasecmp_portable(str_func, "len") == 0) { if (operand1 && operand2 && is_register_str(operand1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1)) return OP_STR_LEN_REG_MEM; }
+        else if (strcasecmp_portable(str_func, "cpy") == 0) { if (operand1 && operand2 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1)) return OP_STR_CPY_MEM_MEM; }
+        else if (strcasecmp_portable(str_func, "cat") == 0) { if (operand1 && operand2 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1)) return OP_STR_CAT_MEM_MEM; }
+        else if (strcasecmp_portable(str_func, "cmp") == 0) { if (operand1 && operand2 && operand3 && is_register_str(operand1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && (is_memory_address_str(operand3) || get_label_address(operand3) != -1)) return OP_STR_CMP_REG_MEM_MEM; }
+        else if (strcasecmp_portable(str_func, "ncpy") == 0) { if (operand1 && operand2 && operand3 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && is_register_str(operand3)) return OP_STR_NCPY_MEM_MEM_REG; }
+        else if (strcasecmp_portable(str_func, "ncat") == 0) { if (operand1 && operand2 && operand3 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && is_register_str(operand3)) return OP_STR_NCAT_MEM_MEM_REG; }
+        else if (strcasecmp_portable(str_func, "toupper") == 0) { if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1)) return OP_STR_TOUPPER_MEM; }
+        else if (strcasecmp_portable(str_func, "tolower") == 0) { if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1)) return OP_STR_TOLOWER_MEM; }
+        else if (strcasecmp_portable(str_func, "chr") == 0) { if (operand1 && operand2 && operand3 && is_register_str(operand1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && !is_register_str(operand3) && !is_memory_address_str(operand3)) return OP_STR_CHR_REG_MEM_VAL; }
+        else if (strcasecmp_portable(str_func, "str") == 0) { if (operand1 && operand2 && operand3 && is_register_str(operand1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && (is_memory_address_str(operand3) || get_label_address(operand3) != -1)) return OP_STR_STR_REG_MEM_MEM; }
+        else if (strcasecmp_portable(str_func, "atoi") == 0) { if (operand1 && operand2 && is_register_str(operand1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1)) return OP_STR_ATOI_REG_MEM; }
+        else if (strcasecmp_portable(str_func, "itoa") == 0) { if (operand1 && operand2 && operand3 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && is_register_str(operand2) && is_register_str(operand3)) return OP_STR_ITOA_MEM_REG_REG; }
+        else if (strcasecmp_portable(str_func, "substr") == 0) { if (operand1 && operand2 && operand3 && operand4 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && is_register_str(operand3) && is_register_str(operand4)) return OP_STR_SUBSTR_MEM_MEM_REG_REG; }
+        else if (strcasecmp_portable(str_func, "fmt") == 0) { if (operand1 && operand2 && operand3 && operand4 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && is_register_str(operand3) && is_register_str(operand4)) return OP_STR_FMT_MEM_MEM_REG_REG; }
     }
     else if (strncmp(op_str, "mem.", 4) == 0) {
         char* mem_func = op_str + 4;
-        if (_stricmp(mem_func, "cpy") == 0) { if (operand1 && operand2 && operand3 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && is_register_str(operand3)) return OP_MEM_CPY_MEM_MEM_REG; }
-        else if (_stricmp(mem_func, "set") == 0) {
+        if (strcasecmp_portable(mem_func, "cpy") == 0) { if (operand1 && operand2 && operand3 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1) && (is_memory_address_str(operand2) || get_label_address(operand2) != -1) && is_register_str(operand3)) return OP_MEM_CPY_MEM_MEM_REG; }
+        else if (strcasecmp_portable(mem_func, "set") == 0) {
             if (operand1 && operand2 && operand3) {
                 if ((is_memory_address_str(operand1) || get_label_address(operand1) != -1) && is_register_str(operand2) && !is_register_str(operand3) && !is_memory_address_str(operand3)) return OP_MEM_SET_MEM_REG_VAL;
                 else if ((is_memory_address_str(operand1) || get_label_address(operand1) != -1) && is_register_str(operand2) && is_register_str(operand3)) return OP_MEM_SET_MEM_REG_REG;
             }
         }
-        else if (_stricmp(mem_func, "clear") == 0) { if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1)) return OP_MEM_FREE_MEM; }
+        else if (strcasecmp_portable(mem_func, "clear") == 0) { if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1)) return OP_MEM_FREE_MEM; }
     }
     else if (strncmp(op_str, "sys.", 4) == 0) {
         char* sys_func = op_str + 4;
-        if (_stricmp(sys_func, "print_char") == 0) { if (operand1 && (is_register_str(operand1) || !is_register_str(operand1) && !is_memory_address_str(operand1))) return OP_SYS_PRINT_CHAR; }
-        else if (_stricmp(sys_func, "clear_screen") == 0) return OP_SYS_CLEAR_SCREEN;
-        else if (_stricmp(sys_func, "print_string") == 0) { if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1 || is_register_str(operand1))) return OP_SYS_PRINT_STRING; }
-        else if (_stricmp(sys_func, "newline") == 0) return OP_SYS_PRINT_NEWLINE;
-        else if (_stricmp(sys_func, "set_cursor_pos") == 0) { if (operand1 && operand2 && (is_register_str(operand1) || !is_register_str(operand1) && !is_memory_address_str(operand1)) && (is_register_str(operand2) || !is_register_str(operand2) && !is_memory_address_str(operand2))) return OP_SYS_SET_CURSOR_POS; }
-        else if (_stricmp(sys_func, "get_cursor_pos") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_SYS_GET_CURSOR_POS; }
-        else if (_stricmp(sys_func, "set_text_color") == 0) { if (operand1 && (is_register_str(operand1) || !is_register_str(operand1) && !is_memory_address_str(operand1))) return OP_SYS_SET_TEXT_COLOR; }
-        else if (_stricmp(sys_func, "reset_text_color") == 0) return OP_SYS_RESET_TEXT_COLOR;
-        else if (_stricmp(sys_func, "print_number_dec") == 0) { if (operand1 && is_register_str(operand1)) return OP_SYS_PRINT_NUMBER_DEC; }
-        else if (_stricmp(sys_func, "print_number_hex") == 0) { if (operand1 && is_register_str(operand1)) return OP_SYS_PRINT_NUMBER_HEX; }
-        else if (_stricmp(sys_func, "number_to_string") == 0) { if (operand1 && operand2 && operand3 && is_register_str(operand1) && is_register_str(operand2) && is_register_str(operand3)) return OP_SYS_NUMBER_TO_STRING; }
-        else if (_stricmp(sys_func, "read_char") == 0) { if (operand1 && is_register_str(operand1)) return OP_SYS_READ_CHAR; }
-        else if (_stricmp(sys_func, "read_string") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_SYS_READ_STRING; }
-        else if (_stricmp(sys_func, "get_key_press") == 0) { if (operand1 && is_register_str(operand1)) return OP_SYS_GET_KEY_PRESS; }
-        else if (_stricmp(sys_func, "cpu_ver") == 0) { if (operand1 && is_register_str(operand1)) return OP_SYS_GET_CPU_VER; }
-        else if (_stricmp(sys_func, "wait") == 0) { if (operand1 && (is_register_str(operand1) || !is_register_str(operand1) && !is_memory_address_str(operand1))) return OP_SYS_WAIT; }
-        else if (_stricmp(sys_func, "time") == 0) { if (operand1 && is_register_str(operand1)) return OP_SYS_TIME_REG; }
+        if (strcasecmp_portable(sys_func, "print_char") == 0) { if (operand1 && (is_register_str(operand1) || !is_register_str(operand1) && !is_memory_address_str(operand1))) return OP_SYS_PRINT_CHAR; }
+        else if (strcasecmp_portable(sys_func, "clear_screen") == 0) return OP_SYS_CLEAR_SCREEN;
+        else if (strcasecmp_portable(sys_func, "print_string") == 0) { if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1 || is_register_str(operand1))) return OP_SYS_PRINT_STRING; }
+        else if (strcasecmp_portable(sys_func, "newline") == 0) return OP_SYS_PRINT_NEWLINE;
+        else if (strcasecmp_portable(sys_func, "set_cursor_pos") == 0) { if (operand1 && operand2 && (is_register_str(operand1) || !is_register_str(operand1) && !is_memory_address_str(operand1)) && (is_register_str(operand2) || !is_register_str(operand2) && !is_memory_address_str(operand2))) return OP_SYS_SET_CURSOR_POS; }
+        else if (strcasecmp_portable(sys_func, "get_cursor_pos") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_SYS_GET_CURSOR_POS; }
+        else if (strcasecmp_portable(sys_func, "set_text_color") == 0) { if (operand1 && (is_register_str(operand1) || !is_register_str(operand1) && !is_memory_address_str(operand1))) return OP_SYS_SET_TEXT_COLOR; }
+        else if (strcasecmp_portable(sys_func, "reset_text_color") == 0) return OP_SYS_RESET_TEXT_COLOR;
+        else if (strcasecmp_portable(sys_func, "print_number_dec") == 0) { if (operand1 && is_register_str(operand1)) return OP_SYS_PRINT_NUMBER_DEC; }
+        else if (strcasecmp_portable(sys_func, "print_number_hex") == 0) { if (operand1 && is_register_str(operand1)) return OP_SYS_PRINT_NUMBER_HEX; }
+        else if (strcasecmp_portable(sys_func, "number_to_string") == 0) { if (operand1 && operand2 && operand3 && is_register_str(operand1) && is_register_str(operand2) && is_register_str(operand3)) return OP_SYS_NUMBER_TO_STRING; }
+        else if (strcasecmp_portable(sys_func, "read_char") == 0) { if (operand1 && is_register_str(operand1)) return OP_SYS_READ_CHAR; }
+        else if (strcasecmp_portable(sys_func, "read_string") == 0) { if (operand1 && operand2 && is_register_str(operand1) && is_register_str(operand2)) return OP_SYS_READ_STRING; }
+        else if (strcasecmp_portable(sys_func, "get_key_press") == 0) { if (operand1 && is_register_str(operand1)) return OP_SYS_GET_KEY_PRESS; }
+        else if (strcasecmp_portable(sys_func, "cpu_ver") == 0) { if (operand1 && is_register_str(operand1)) return OP_SYS_GET_CPU_VER; }
+        else if (strcasecmp_portable(sys_func, "wait") == 0) { if (operand1 && (is_register_str(operand1) || !is_register_str(operand1) && !is_memory_address_str(operand1))) return OP_SYS_WAIT; }
+        else if (strcasecmp_portable(sys_func, "time") == 0) { if (operand1 && is_register_str(operand1)) return OP_SYS_TIME_REG; }
     }
     else if (strncmp(op_str, "disk.", 5) == 0) {
         char* disk_func = op_str + 5;
-        if (_stricmp(disk_func, "get_size") == 0) { if (operand1 && is_register_str(operand1)) return OP_DISK_GET_SIZE_REG; }
-        else if (_stricmp(disk_func, "read_sector") == 0) { if (operand1 && operand2 && operand3 && is_register_str(operand1) && is_register_str(operand2) && (is_memory_address_str(operand3) || get_label_address(operand3) != -1)) return OP_DISK_READ_SECTOR_MEM_REG_REG; }
-        else if (_stricmp(disk_func, "write_sector") == 0) { if (operand1 && operand2 && operand3 && is_register_str(operand1) && is_register_str(operand2) && (is_memory_address_str(operand3) || get_label_address(operand3) != -1)) return OP_DISK_WRITE_SECTOR_MEM_REG_REG; }
-        else if (_stricmp(disk_func, "create_image") == 0) return OP_DISK_CREATE_IMAGE;
-        else if (_stricmp(disk_func, "get_volume_label") == 0) { if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1)) return OP_DISK_GET_VOLUME_LABEL_MEM; }
-        else if (_stricmp(disk_func, "set_volume_label") == 0) { if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1)) return OP_DISK_SET_VOLUME_LABEL_MEM; }
-        else if (_stricmp(disk_func, "format_disk") == 0) return OP_DISK_FORMAT_DISK;
+        if (strcasecmp_portable(disk_func, "get_size") == 0) { if (operand1 && is_register_str(operand1)) return OP_DISK_GET_SIZE_REG; }
+        else if (strcasecmp_portable(disk_func, "read_sector") == 0) { if (operand1 && operand2 && operand3 && is_register_str(operand1) && is_register_str(operand2) && (is_memory_address_str(operand3) || get_label_address(operand3) != -1)) return OP_DISK_READ_SECTOR_MEM_REG_REG; }
+        else if (strcasecmp_portable(disk_func, "write_sector") == 0) { if (operand1 && operand2 && operand3 && is_register_str(operand1) && is_register_str(operand2) && (is_memory_address_str(operand3) || get_label_address(operand3) != -1)) return OP_DISK_WRITE_SECTOR_MEM_REG_REG; }
+        else if (strcasecmp_portable(disk_func, "create_image") == 0) return OP_DISK_CREATE_IMAGE;
+        else if (strcasecmp_portable(disk_func, "get_volume_label") == 0) { if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1)) return OP_DISK_GET_VOLUME_LABEL_MEM; }
+        else if (strcasecmp_portable(disk_func, "set_volume_label") == 0) { if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1)) return OP_DISK_SET_VOLUME_LABEL_MEM; }
+        else if (strcasecmp_portable(disk_func, "format_disk") == 0) return OP_DISK_FORMAT_DISK;
     }
     else if (strncmp(op_str, "gfx.", 4) == 0) {
         char* gfx_func = op_str + 4;
-        if (_stricmp(gfx_func, "init") == 0) return OP_GFX_INIT;
-        else if (_stricmp(gfx_func, "close") == 0) return OP_GFX_CLOSE;
-        else if (_stricmp(gfx_func, "pixel") == 0) {
+        if (strcasecmp_portable(gfx_func, "init") == 0) return OP_GFX_INIT;
+        else if (strcasecmp_portable(gfx_func, "close") == 0) return OP_GFX_CLOSE;
+        else if (strcasecmp_portable(gfx_func, "pixel") == 0) {
             if (operand1 && operand2 && operand3 && is_register_str(operand1) && is_register_str(operand2) && is_register_str(operand3)) return OP_GFX_DRAW_PIXEL;
         }
-        else if (_stricmp(gfx_func, "clear") == 0) {
+        else if (strcasecmp_portable(gfx_func, "clear") == 0) {
             if (operand1 && is_register_str(operand1)) return OP_GFX_CLEAR;
         }
-        else if (_stricmp(gfx_func, "get_screen_width") == 0) {
+        else if (strcasecmp_portable(gfx_func, "get_screen_width") == 0) {
             if (operand1 && is_register_str(operand1)) return OP_GFX_GET_SCREEN_WIDTH_REG;
         }
-        else if (_stricmp(gfx_func, "get_screen_height") == 0) {
+        else if (strcasecmp_portable(gfx_func, "get_screen_height") == 0) {
             if (operand1 && is_register_str(operand1)) return OP_GFX_GET_SCREEN_HEIGHT_REG;
         }
-        else if (_stricmp(gfx_func, "get_vram_size") == 0) {
+        else if (strcasecmp_portable(gfx_func, "get_vram_size") == 0) {
             if (operand1 && is_register_str(operand1)) return OP_GFX_GET_VRAM_SIZE_REG;
         }
-        else if (_stricmp(gfx_func, "get_gpu_ver") == 0) {
+        else if (strcasecmp_portable(gfx_func, "get_gpu_ver") == 0) {
             if (operand1 && is_register_str(operand1)) return OP_GFX_GET_GPU_VER_REG;
         }
     }
@@ -2396,12 +2448,12 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, ch
 RegisterIndex register_from_string(const char* reg_str) {
     if (!reg_str) return REG_INVALID;
 
-    if (strcmp(reg_str, "SP") == 0) return REG_SP;
-    if (strcmp(reg_str, "ZF") == 0) return REG_ZF;
-    if (strcmp(reg_str, "SF") == 0) return REG_SF;
-    if (strcmp(reg_str, "CF") == 0) return REG_CF;
-    if (strcmp(reg_str, "OF") == 0) return REG_OF;
-    if (strlen(reg_str) >= 2 && reg_str[0] == 'R') {
+    if (strcasecmp_portable(reg_str, "SP") == 0) return REG_SP;
+    if (strcasecmp_portable(reg_str, "ZF") == 0) return REG_ZF;
+    if (strcasecmp_portable(reg_str, "SF") == 0) return REG_SF;
+    if (strcasecmp_portable(reg_str, "CF") == 0) return REG_CF;
+    if (strcasecmp_portable(reg_str, "OF") == 0) return REG_OF;
+    if (strlen(reg_str) >= 2 && toupper(reg_str[0]) == 'R') { 
         int reg_num = atoi(reg_str + 1);
         if (reg_num >= 0 && reg_num < NUM_GENERAL_REGISTERS) {
             return (RegisterIndex)reg_num;
@@ -3081,6 +3133,8 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_SYS_READ_STRING:
         case OP_SYS_GET_CURSOR_POS:
             instruction_bytes += 3; break;
+        case OP_MEM_TEST:
+            instruction_bytes = 1; break;
         case OP_SYS_RESET_TEXT_COLOR:
         case OP_SYS_PRINT_NEWLINE:
         case OP_SYS_CLEAR_SCREEN:
@@ -3670,6 +3724,10 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
 
             break;
         }
+        case OP_MEM_TEST: {
+            char opcode_hex[8]; sprintf(opcode_hex, "%02X ", opcode); strcat(binary_output, opcode_hex);
+            break; 
+        }
         case OP_SYS_RESET_TEXT_COLOR:
         case OP_SYS_PRINT_NEWLINE:
         case OP_SYS_CLEAR_SCREEN:
@@ -3778,7 +3836,6 @@ int main(int argc, char* argv[]) {
 #else
     mkdir("img", 0777);
 #endif
-
 
     while (1) {
         printf("\nChoose action:\n");
