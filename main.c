@@ -1,4 +1,5 @@
 #define _CRT_SECURE_NO_WARNINGS
+#define SDL_MAIN_HANDLED
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,15 +18,22 @@
 #include <limits.h>
 #endif
 #include <time.h>
+#include <SDL.h>
 
 #define MEMORY_SIZE (16384 * 1024) // 16MB Memory
+#define VRAM_SIZE (64 * 1024) //64 KB VRAM
+#define VRAM_START_ADDRESS (MEMORY_SIZE - VRAM_SIZE)
 #define NUM_GENERAL_REGISTERS 32
-#define CPU_VER 5
+#define CPU_VER 6
+#define GPU_VER 1
 #define MAX_PREPROCESSOR_DEPTH 10
 
 #define CLOCK_SPEED_MHZ 4.77
 #define TARGET_INSTRUCTIONS_PER_SECOND 100000
 #define DELAY_DURATION_US (1000000 / TARGET_INSTRUCTIONS_PER_SECOND)
+
+#define SCREEN_WIDTH  128  
+#define SCREEN_HEIGHT 128 
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -128,6 +136,16 @@ typedef enum {
     OP_DISK_GET_VOLUME_LABEL_MEM,
     OP_DISK_SET_VOLUME_LABEL_MEM,
 
+    // Graphics Standard Library 
+    OP_GFX_INIT,
+    OP_GFX_CLOSE,
+    OP_GFX_DRAW_PIXEL,
+    OP_GFX_CLEAR, 
+    OP_GFX_GET_SCREEN_WIDTH_REG,
+    OP_GFX_GET_SCREEN_HEIGHT_REG,
+    OP_GFX_GET_VRAM_SIZE_REG,
+    OP_GFX_GET_GPU_VER_REG,
+
     OP_INVALID
 } Opcode;
 
@@ -167,6 +185,41 @@ typedef struct {
     uint32_t size;
 } BufferDefinition;
 
+uint32_t palette[32] = {
+    0x00000000, // 0: Black
+    0xFFFFFFFF, // 1: White
+    0xFFFF0000, // 2: Red
+    0xFF00FF00, // 3: Green
+    0xFF0000FF, // 4: Blue
+    0xFFFFD700, // 5: Gold
+    0xFFFFA500, // 6: Orange
+    0xFF800080, // 7: Purple
+    0xFF00FFFF, // 8: Cyan
+    0xFFFF00FF, // 9: Magenta
+    0xFF808080, // 10: Gray
+    0xC0C0C0,   // 11: Light Gray
+    0x808080,   // 12: Dark Gray
+    0x008000,   // 13: Dark Green
+    0x000080,   // 14: Dark Blue
+    0x800000,   // 15: Maroon
+    0xFFE4B5,   // 16: Moccasin
+    0xD2B48C,   // 17: Tan
+    0xFAF0E6,   // 18: Linen
+    0x7FFFD4,   // 19: Aquamarine
+    0xF0F8FF,   // 20: AliceBlue
+    0xFAEBD7,   // 21: AntiqueWhite
+    0x00FFFF,   // 22: Aqua
+    0x7FFFD4,   // 23: Aquamarine
+    0xF0FFFF,   // 24: Azure
+    0xF5F5DC,   // 25: Beige
+    0xFFEBCD,   // 26: BlanchedAlmond
+    0xFFA07A,   // 27: Light Salmon 
+    0xADD8E6,   // 28: Light Blue 
+    0x90EE90,   // 29: Light Green 
+    0xF0E68C,   // 30: Khaki       
+    0xE0FFFF    // 31: PaleCyan    
+};
+
 uint8_t memory[MEMORY_SIZE];
 double registers[NUM_TOTAL_REGISTERS];
 uint32_t program_counter = 0;
@@ -189,6 +242,12 @@ int cursor_x = 0;
 int cursor_y = 0;
 int text_color = 7;
 extern bool debug_mode;
+
+SDL_Window* gfx_window = NULL;      
+SDL_Renderer* gfx_renderer = NULL;   
+SDL_Texture* gfx_texture = NULL;     
+uint32_t* gfx_pixels = NULL;       //Pixel buffer in memory
+bool          gfx_initialized = false; //Flag to track gfx init
 
 #ifndef _WIN32
 struct termios original_termios;
@@ -642,7 +701,7 @@ DiskResultCode format_disk() {
     header.version = DISK_VERSION;
     header.sector_size = DISK_SECTOR_SIZE;
     header.num_sectors = DISK_NUM_SECTORS;
-    strncpy(header.volume_label, "FORMATTED", sizeof(header.volume_label) - 1); 
+    strncpy(header.volume_label, "VIRTUAL_DRIVE", sizeof(header.volume_label) - 1); 
     header.volume_label[sizeof(header.volume_label) - 1] = '\0';
     memset(header.reserved, 0, sizeof(header.reserved));
 
@@ -675,6 +734,132 @@ DiskResultCode format_disk() {
     fclose(disk_image_file);
     printf("Disk image '%s' formatted successfully.\n", DISK_IMAGE_FILENAME);
     return DISK_OK;
+}
+
+bool gfx_init() {
+    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+        fprintf(stderr, "SDL_Init Error: %s\n", SDL_GetError());
+        return false;
+    }
+
+    gfx_window = SDL_CreateWindow(
+        "Virtual CPU Graphics",
+        SDL_WINDOWPOS_UNDEFINED,
+        SDL_WINDOWPOS_UNDEFINED,
+        SCREEN_WIDTH * 4, 
+        SCREEN_HEIGHT * 4,
+        SDL_WINDOW_SHOWN
+    );
+    if (gfx_window == NULL) {
+        fprintf(stderr, "SDL_CreateWindow Error: %s\n", SDL_GetError());
+        SDL_Quit();
+        return false;
+    }
+
+    gfx_renderer = SDL_CreateRenderer(gfx_window, -1, SDL_RENDERER_ACCELERATED);
+    if (gfx_renderer == NULL) {
+        fprintf(stderr, "SDL_CreateRenderer Error: %s\n", SDL_GetError());
+        SDL_DestroyWindow(gfx_window);
+        SDL_Quit();
+        return false;
+    }
+
+    gfx_texture = SDL_CreateTexture(
+        gfx_renderer,
+        SDL_PIXELFORMAT_ARGB8888,
+        SDL_TEXTUREACCESS_STREAMING,
+        SCREEN_WIDTH,
+        SCREEN_HEIGHT
+    );
+    if (gfx_texture == NULL) {
+        fprintf(stderr, "SDL_CreateTexture Error: %s\n", SDL_GetError());
+        SDL_DestroyRenderer(gfx_renderer);
+        SDL_DestroyWindow(gfx_window);
+        SDL_Quit();
+        return false;
+    }
+
+    gfx_pixels = (uint32_t*)&memory[VRAM_START_ADDRESS];
+    if (gfx_pixels == NULL) {
+        fprintf(stderr, "Failed to allocate pixel buffer.\n");
+        SDL_DestroyTexture(gfx_texture);
+        SDL_DestroyRenderer(gfx_renderer);
+        SDL_DestroyWindow(gfx_window);
+        SDL_Quit();
+        return false;
+    }
+    memset(gfx_pixels, 0, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(uint32_t)); // Initialize to black
+
+    gfx_initialized = true;
+    return true;
+}
+
+void gfx_close() {
+    if (gfx_initialized) {
+        SDL_DestroyTexture(gfx_texture);
+        SDL_DestroyRenderer(gfx_renderer);
+        SDL_DestroyWindow(gfx_window);
+        SDL_Quit();
+        gfx_initialized = false;
+    }
+}
+
+void gfx_update_screen() {
+    if (gfx_initialized) {
+        SDL_UpdateTexture(gfx_texture, NULL, gfx_pixels, SCREEN_WIDTH * sizeof(uint32_t));
+        SDL_RenderClear(gfx_renderer);
+        SDL_RenderCopy(gfx_renderer, gfx_texture, NULL, NULL);
+
+        SDL_Rect destRect = { 0, 0, SCREEN_WIDTH * 4, SCREEN_HEIGHT * 4 };
+        SDL_RenderCopy(gfx_renderer, gfx_texture, NULL, &destRect);
+
+        SDL_RenderPresent(gfx_renderer);
+    }
+}
+
+void gfx_draw_pixel(int x, int y, uint32_t palette_index) {
+    if (gfx_initialized && x >= 0 && x < SCREEN_WIDTH && y >= 0 && y < SCREEN_HEIGHT) {
+        if (palette_index < 32) { 
+            gfx_pixels[y * SCREEN_WIDTH + x] = palette[palette_index];
+        }
+        else {
+            gfx_pixels[y * SCREEN_WIDTH + x] = palette[0];
+            fprintf(stderr, "Warning: Palette index out of bounds: %u\n", palette_index);
+        }
+    }
+}
+
+void gfx_clear_screen(uint32_t palette_index) { 
+    if (gfx_initialized) {
+        uint32_t clear_color;
+        if (palette_index < 32) {
+            clear_color = palette[palette_index]; 
+        }
+        else {
+            clear_color = palette[0]; 
+            fprintf(stderr, "Warning: Palette index out of bounds for clear: %u\n", palette_index);
+        }
+        for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT; ++i) {
+            gfx_pixels[i] = clear_color; 
+        }
+    }
+}
+
+
+uint32_t gfx_get_screen_width() {
+    return SCREEN_WIDTH;
+}
+
+uint32_t gfx_get_screen_height() {
+    return SCREEN_HEIGHT;
+}
+
+uint32_t gfx_get_vram_size() {
+    return VRAM_SIZE;
+}
+
+uint32_t gfx_get_gpu_ver() {
+    return GPU_VER;
 }
 
 // Instruction Decoding
@@ -1928,6 +2113,63 @@ void execute_instruction(Opcode opcode) {
         break;
     }
 
+    case OP_GFX_INIT:
+        if (debug_mode) printf("gfx.init\n");
+        if (!gfx_initialized) {
+            if (!gfx_init()) {
+                printf("GFX Error: Initialization failed!\n");
+                running = false;
+            }
+        }
+        break;
+
+    case OP_GFX_CLOSE:
+        if (debug_mode) printf("gfx.close\n");
+        gfx_close();
+        break;
+
+    case OP_GFX_DRAW_PIXEL: {
+        reg1 = decode_register(); // X
+        reg2 = decode_register(); // Y
+        reg3 = decode_register(); // Color (ARGB8888 as a double/uint32_t in register)
+        if (debug_mode) printf("gfx.pixel %s, %s, %s\n", register_string(reg1), register_string(reg2), register_string(reg3));
+        if (reg1 != REG_INVALID && reg2 != REG_INVALID && reg3 != REG_INVALID) {
+            gfx_draw_pixel((int)registers[reg1], (int)registers[reg2], (uint32_t)registers[reg3]);
+        }
+        break;
+    }
+    case OP_GFX_CLEAR: { 
+        reg1 = decode_register(); // Color register
+        if (debug_mode) printf("gfx.clear %s\n", register_string(reg1));
+        if (reg1 != REG_INVALID) {
+            gfx_clear_screen((uint32_t)registers[reg1]);
+        }
+        break;
+    }
+    case OP_GFX_GET_SCREEN_WIDTH_REG: {
+        reg1 = decode_register();
+        if (debug_mode) printf("gfx.get_screen_width %s\n", register_string(reg1));
+        if (reg1 != REG_INVALID) registers[reg1] = gfx_get_screen_width();
+        break;
+    }
+    case OP_GFX_GET_SCREEN_HEIGHT_REG: {
+        reg1 = decode_register();
+        if (debug_mode) printf("gfx.get_screen_height %s\n", register_string(reg1));
+        if (reg1 != REG_INVALID) registers[reg1] = gfx_get_screen_height();
+        break;
+    }
+    case OP_GFX_GET_VRAM_SIZE_REG: {
+        reg1 = decode_register();
+        if (debug_mode) printf("gfx.get_vram_size %s\n", register_string(reg1));
+        if (reg1 != REG_INVALID) registers[reg1] = gfx_get_vram_size();
+        break;
+    }
+    case OP_GFX_GET_GPU_VER_REG: {
+        reg1 = decode_register();
+        if (debug_mode) printf("gfx.get_gpu_ver %s\n", register_string(reg1));
+        if (reg1 != REG_INVALID) registers[reg1] = gfx_get_gpu_ver();
+        break;
+    }
 
     case OP_INVALID: printf("Invalid Opcode!\n"); running = false; break;
     default: printf("Unknown Opcode: %d\n", opcode); running = false; break;
@@ -1946,6 +2188,7 @@ void run_vm() {
     while (running) {
         Opcode opcode = decode_opcode();
         execute_instruction(opcode);
+        gfx_update_screen();
 
 #ifndef _WIN32
         usleep(DELAY_DURATION_US);
@@ -2123,6 +2366,29 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, ch
         else if (_stricmp(disk_func, "set_volume_label") == 0) { if (operand1 && (is_memory_address_str(operand1) || get_label_address(operand1) != -1)) return OP_DISK_SET_VOLUME_LABEL_MEM; }
         else if (_stricmp(disk_func, "format_disk") == 0) return OP_DISK_FORMAT_DISK;
     }
+    else if (strncmp(op_str, "gfx.", 4) == 0) {
+        char* gfx_func = op_str + 4;
+        if (_stricmp(gfx_func, "init") == 0) return OP_GFX_INIT;
+        else if (_stricmp(gfx_func, "close") == 0) return OP_GFX_CLOSE;
+        else if (_stricmp(gfx_func, "pixel") == 0) {
+            if (operand1 && operand2 && operand3 && is_register_str(operand1) && is_register_str(operand2) && is_register_str(operand3)) return OP_GFX_DRAW_PIXEL;
+        }
+        else if (_stricmp(gfx_func, "clear") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_GFX_CLEAR;
+        }
+        else if (_stricmp(gfx_func, "get_screen_width") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_GFX_GET_SCREEN_WIDTH_REG;
+        }
+        else if (_stricmp(gfx_func, "get_screen_height") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_GFX_GET_SCREEN_HEIGHT_REG;
+        }
+        else if (_stricmp(gfx_func, "get_vram_size") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_GFX_GET_VRAM_SIZE_REG;
+        }
+        else if (_stricmp(gfx_func, "get_gpu_ver") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_GFX_GET_GPU_VER_REG;
+        }
+    }
 
     return OP_INVALID;
 }
@@ -2215,7 +2481,8 @@ double parse_value_double(const char* value_str) {
         }
     }
     else if (strncmp(value_str, "0x", 2) == 0) {
-        return (double)strtol(value_str + 2, NULL, 16);
+        uint32_t hex_value = (uint32_t)strtoull(value_str + 2, NULL, 16); 
+        return (double)hex_value;
     }
     else if (strncmp(value_str, "0b", 2) == 0) {
         return (double)strtol(value_str + 2, NULL, 2);
@@ -2822,6 +3089,22 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_RET:
         case OP_DISK_FORMAT_DISK:
             instruction_bytes = 1; break;
+        case OP_GFX_INIT:
+        case OP_GFX_CLOSE:
+            instruction_bytes = 1; 
+            break;
+        case OP_GFX_CLEAR:
+            instruction_bytes += 2; 
+            break;
+        case OP_GFX_GET_SCREEN_WIDTH_REG:  
+        case OP_GFX_GET_SCREEN_HEIGHT_REG:
+        case OP_GFX_GET_VRAM_SIZE_REG:
+        case OP_GFX_GET_GPU_VER_REG:
+            instruction_bytes += 2; 
+            break;
+        case OP_GFX_DRAW_PIXEL:
+            instruction_bytes += 3;
+            break;
         default:
             fprintf(stderr, "Assembler Error (Pass 1): Unhandled opcode size calculation for '%s' on line %d.\n", token, line_number);
             fclose(asm_file);
@@ -3396,6 +3679,47 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_DISK_FORMAT_DISK:
         {
             char opcode_hex[8]; sprintf(opcode_hex, "%02X ", opcode); strcat(binary_output, opcode_hex);
+            break;
+        }
+        case OP_GFX_INIT:
+        case OP_GFX_CLOSE:
+        case OP_GFX_CLEAR:
+        {
+            char opcode_hex[8]; sprintf(opcode_hex, "%02X ", opcode); strcat(binary_output, opcode_hex);
+            RegisterIndex reg = REG_INVALID;
+            if (opcode == OP_GFX_CLEAR) {
+                reg = register_from_string(reg1_str);
+                memory[program_counter++] = (uint8_t)reg;
+                char reg_hex[8]; sprintf(reg_hex, "%02X ", reg); strcat(binary_output, reg_hex);
+            }
+            break;
+        }
+        case OP_GFX_GET_SCREEN_WIDTH_REG:
+        case OP_GFX_GET_SCREEN_HEIGHT_REG:
+        case OP_GFX_GET_VRAM_SIZE_REG:
+        case OP_GFX_GET_GPU_VER_REG:
+        {
+            RegisterIndex reg = register_from_string(reg1_str);
+            memory[program_counter++] = (uint8_t)reg;
+
+            char opcode_hex[8]; sprintf(opcode_hex, "%02X ", opcode); strcat(binary_output, opcode_hex);
+            char reg_hex[8]; sprintf(reg_hex, "%02X ", reg); strcat(binary_output, reg_hex);
+            break;
+        }
+        case OP_GFX_DRAW_PIXEL:
+        {
+            RegisterIndex reg1 = register_from_string(reg1_str); // X
+            RegisterIndex reg2 = register_from_string(reg2_str); // Y
+            RegisterIndex reg3 = register_from_string(reg3_str); // Color
+
+            memory[program_counter++] = (uint8_t)reg1;
+            memory[program_counter++] = (uint8_t)reg2;
+            memory[program_counter++] = (uint8_t)reg3;
+
+            char opcode_hex[8]; sprintf(opcode_hex, "%02X ", opcode); strcat(binary_output, opcode_hex);
+            char reg1_hex[8]; sprintf(reg1_hex, "%02X ", reg1); strcat(binary_output, reg1_hex);
+            char reg2_hex[8]; sprintf(reg2_hex, "%02X ", reg2); strcat(binary_output, reg2_hex);
+            char reg3_hex[8]; sprintf(reg3_hex, "%02X ", reg3); strcat(binary_output, reg3_hex);
             break;
         }
         default:
