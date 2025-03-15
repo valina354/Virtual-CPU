@@ -24,8 +24,11 @@
 #define VRAM_SIZE (64 * 1024) //64 KB VRAM
 #define VRAM_START_ADDRESS (MEMORY_SIZE - VRAM_SIZE)
 #define NUM_GENERAL_REGISTERS 32
-#define CPU_VER 6
+#define CPU_VER 7
 #define GPU_VER 1
+#define AUDIO_VER 1
+#define AUDIO_SAMPLE_RATE 44100 // Standard sample rate
+#define AUDIO_FREQUENCY_BASE 440.0 // Base frequency for pitch calculations (A4)
 #define MAX_PREPROCESSOR_DEPTH 10
 
 #define SCREEN_WIDTH  128  
@@ -143,6 +146,14 @@ typedef enum {
     OP_GFX_GET_VRAM_SIZE_REG,
     OP_GFX_GET_GPU_VER_REG,
 
+    // Audio Standard Library
+    OP_AUDIO_INIT,
+    OP_AUDIO_CLOSE,
+    OP_AUDIO_SPEAKER_ON,
+    OP_AUDIO_SPEAKER_OFF,
+    OP_AUDIO_SET_PITCH_REG,
+    OP_AUDIO_GET_AUDIO_VER_REG,
+
     OP_INVALID
 } Opcode;
 
@@ -247,6 +258,12 @@ SDL_Texture* gfx_texture = NULL;
 uint32_t* gfx_pixels = NULL;       //Pixel buffer in memory
 bool          gfx_initialized = false; //Flag to track gfx init
 bool needs_gfx_update = false;
+
+bool          audio_initialized = false; // Flag to track audio init
+bool          speaker_enabled = false;    // Speaker on/off state
+double        current_pitch = 440.0;      // Current pitch (frequency)
+SDL_AudioSpec audio_spec;               // SDL Audio specification
+SDL_AudioDeviceID audio_device;         // SDL Audio device ID
 
 #ifndef _WIN32
 struct termios original_termios;
@@ -859,6 +876,81 @@ uint32_t gfx_get_vram_size() {
 
 uint32_t gfx_get_gpu_ver() {
     return GPU_VER;
+}
+
+void audio_callback(void* userdata, Uint8* stream, int len) {
+    static double phase = 0.0; // Keep track of phase for continuous wave
+    float* fstream = (float*)stream;
+    int nframes = len / sizeof(float);
+
+    if (!speaker_enabled) {
+        memset(stream, 0, len); // Silence if speaker is off
+        return;
+    }
+
+    for (int i = 0; i < nframes; i++) {
+        float sample_value = 0.0f;
+        if (speaker_enabled) {
+            // Simple Square Wave (PC Speaker like)
+            sample_value = sin(2.0 * M_PI * current_pitch * phase) >= 0 ? 1.0f : -1.0f;
+        }
+        fstream[i] = sample_value * 0.2f; // Reduce volume to prevent clipping
+        phase += 1.0 / AUDIO_SAMPLE_RATE;
+        if (phase > 1.0) phase -= 1.0; // Wrap phase
+    }
+}
+
+
+bool sys_audio_init() {
+    if (SDL_InitSubSystem(SDL_INIT_AUDIO) < 0) {
+        fprintf(stderr, "SDL_Init Audio Error: %s\n", SDL_GetError());
+        return false;
+    }
+
+    SDL_zero(audio_spec);
+    audio_spec.freq = AUDIO_SAMPLE_RATE;
+    audio_spec.format = AUDIO_F32; // 32-bit floating point audio
+    audio_spec.channels = 1;          // Mono audio
+    audio_spec.samples = 4096;        // Buffer size
+    audio_spec.callback = audio_callback;
+    audio_spec.userdata = NULL;
+
+    audio_device = SDL_OpenAudioDevice(NULL, 0, &audio_spec, NULL, 0);
+    if (audio_device == 0) {
+        fprintf(stderr, "SDL_OpenAudioDevice Error: %s\n", SDL_GetError());
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        return false;
+    }
+
+    SDL_PauseAudioDevice(audio_device, 0); // Unpause audio to start callback
+    audio_initialized = true;
+    return true;
+}
+
+void sys_audio_close() {
+    if (audio_initialized) {
+        SDL_CloseAudioDevice(audio_device);
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        audio_initialized = false;
+    }
+}
+
+void sys_audio_speaker_on() {
+    speaker_enabled = true;
+}
+
+void sys_audio_speaker_off() {
+    speaker_enabled = false;
+}
+
+void sys_audio_set_pitch(double pitch) {
+    current_pitch = pitch;
+    if (current_pitch < 0) current_pitch = 0; // Prevent negative frequencies
+    if (current_pitch > AUDIO_SAMPLE_RATE / 2.0) current_pitch = AUDIO_SAMPLE_RATE / 2.0; // Nyquist limit
+}
+
+uint32_t sys_get_audio_ver() {
+    return AUDIO_VER;
 }
 
 // Instruction Decoding
@@ -2196,6 +2288,40 @@ void execute_instruction(Opcode opcode) {
         break;
     }
 
+    case OP_AUDIO_INIT:
+        if (debug_mode) printf("audio.init\n");
+        if (!audio_initialized) {
+            if (!sys_audio_init()) {
+                printf("AUDIO Error: Initialization failed!\n");
+                running = false;
+            }
+        }
+        break;
+    case OP_AUDIO_CLOSE:
+        if (debug_mode) printf("audio.close\n");
+        sys_audio_close();
+        break;
+    case OP_AUDIO_SPEAKER_ON:
+        if (debug_mode) printf("audio.speaker_on\n");
+        sys_audio_speaker_on();
+        break;
+    case OP_AUDIO_SPEAKER_OFF:
+        if (debug_mode) printf("audio.speaker_off\n");
+        sys_audio_speaker_off();
+        break;
+    case OP_AUDIO_SET_PITCH_REG: {
+        RegisterIndex reg1 = decode_register();
+        if (debug_mode) printf("audio.set_pitch %s\n", register_string(reg1));
+        if (reg1 != REG_INVALID) sys_audio_set_pitch(registers[reg1]);
+        break;
+    }
+    case OP_AUDIO_GET_AUDIO_VER_REG: {
+        RegisterIndex reg1 = decode_register();
+        if (debug_mode) printf("audio.get_ver %s\n", register_string(reg1));
+        if (reg1 != REG_INVALID) registers[reg1] = sys_get_audio_ver();
+        break;
+    }
+
     case OP_INVALID: printf("Invalid Opcode!\n"); running = false; break;
     default: printf("Unknown Opcode: %d\n", opcode); running = false; break;
     }
@@ -2439,6 +2565,19 @@ Opcode opcode_from_string(const char* op_str, char* operand1, char* operand2, ch
         }
         else if (strcasecmp_portable(gfx_func, "get_gpu_ver") == 0) {
             if (operand1 && is_register_str(operand1)) return OP_GFX_GET_GPU_VER_REG;
+        }
+    }
+    else if (strncmp(op_str, "audio.", 6) == 0) { // <-- Insert this block
+        char* audio_func = op_str + 6;
+        if (strcasecmp_portable(audio_func, "init") == 0) return OP_AUDIO_INIT;
+        else if (strcasecmp_portable(audio_func, "close") == 0) return OP_AUDIO_CLOSE;
+        else if (strcasecmp_portable(audio_func, "speaker_on") == 0) return OP_AUDIO_SPEAKER_ON;
+        else if (strcasecmp_portable(audio_func, "speaker_off") == 0) return OP_AUDIO_SPEAKER_OFF;
+        else if (strcasecmp_portable(audio_func, "set_pitch") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_AUDIO_SET_PITCH_REG;
+        }
+        else if (strcasecmp_portable(audio_func, "get_ver") == 0) {
+            if (operand1 && is_register_str(operand1)) return OP_AUDIO_GET_AUDIO_VER_REG;
         }
     }
 
@@ -3159,6 +3298,17 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
         case OP_GFX_DRAW_PIXEL:
             instruction_bytes += 3;
             break;
+        case OP_AUDIO_INIT:
+        case OP_AUDIO_CLOSE:
+        case OP_AUDIO_SPEAKER_ON:
+        case OP_AUDIO_SPEAKER_OFF:
+            instruction_bytes = 1;
+            break;
+        case OP_AUDIO_SET_PITCH_REG:
+        case OP_AUDIO_GET_AUDIO_VER_REG:
+            instruction_bytes += 2; 
+            break;
+
         default:
             fprintf(stderr, "Assembler Error (Pass 1): Unhandled opcode size calculation for '%s' on line %d.\n", token, line_number);
             fclose(asm_file);
@@ -3778,6 +3928,23 @@ int assemble_program(const char* asm_filename, const char* rom_filename) {
             char reg1_hex[8]; sprintf(reg1_hex, "%02X ", reg1); strcat(binary_output, reg1_hex);
             char reg2_hex[8]; sprintf(reg2_hex, "%02X ", reg2); strcat(binary_output, reg2_hex);
             char reg3_hex[8]; sprintf(reg3_hex, "%02X ", reg3); strcat(binary_output, reg3_hex);
+            break;
+        }
+        case OP_AUDIO_INIT:
+        case OP_AUDIO_CLOSE:
+        case OP_AUDIO_SPEAKER_ON:
+        case OP_AUDIO_SPEAKER_OFF:
+        {
+            char opcode_hex[8]; sprintf(opcode_hex, "%02X ", opcode); strcat(binary_output, opcode_hex);
+            break;
+        }
+        case OP_AUDIO_SET_PITCH_REG:
+        case OP_AUDIO_GET_AUDIO_VER_REG: {
+            RegisterIndex reg = register_from_string(reg1_str);
+            memory[program_counter++] = (uint8_t)reg;
+
+            char opcode_hex[8]; sprintf(opcode_hex, "%02X ", opcode); strcat(binary_output, opcode_hex);
+            char reg_hex[8]; sprintf(reg_hex, "%02X ", reg); strcat(binary_output, reg_hex);
             break;
         }
         default:
